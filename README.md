@@ -1,12 +1,12 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 7：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 8：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
 - Telegram 市场浏览 / 搜索 / 详情
 - 账户绑定 portal
-- live/simulated 双路径下单准备层
+- signed live/simulated 双路径下单准备层
 - 订单 / 仓位视图
 
 ## 5 步部署
@@ -32,9 +32,11 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 ```
 
-如果你要启用 Phase 7 的 live order request，还需要额外提供：
+如果你要启用 Phase 8 的 live order request，还可以额外提供：
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_ORDER_API_KEY`
+- `POLYMARKET_ORDER_SIGNING_SECRET`
+- `POLYMARKET_BUILDER_TAG`
 
 5. 应用 schema、部署、设置 webhook
 ```bash
@@ -54,7 +56,7 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 7 行为
+## 当前 Phase 8 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
@@ -68,10 +70,10 @@ curl https://<your-worker>.workers.dev/healthz
   - `/find <关键词>` / `/search <关键词>` → 在活跃市场里做本地关键词筛选
   - `/detail <关键词>` → 返回更丰富的单市场详情，尽量带上 slug / outcome / price
   - `/buy <金额>` → 继续保留金额入口占位
-  - `/buy <关键词> <yes|no> <金额>` → 对已绑定用户执行订单网关：有 live API 配置就发真实请求，没有就自动回退到模拟单
+  - `/buy <关键词> <yes|no> <金额>` → 对已绑定用户执行订单网关：有 live API 配置就发真实请求；如果还提供 signing secret，会附带 signed payload 和 `x-order-signature`；没有配置就自动回退到模拟单
   - `/orders` → 返回最近订单记录
   - `/positions` → 返回当前记录里的模拟仓位视图
-  - 其他文本 → 先记录对话，再返回 Phase 7 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 8 引导文案
 - Telegram 菜单按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
@@ -84,4 +86,4 @@ curl https://<your-worker>.workers.dev/healthz
   - `market_cache` 会缓存市场概览和搜索结果
   - `user_account_sessions` 会生成并完成账户接入会话
   - `user_trading_accounts` 会记录已绑定账户基础信息
-  - `trade_events` 会记录 live / simulated 两类订单事件
+  - `trade_events` 会记录 live / simulated 两类订单事件以及请求细节

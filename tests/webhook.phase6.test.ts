@@ -255,7 +255,7 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(payload.text).toContain('还没接入真实下单 API');
   });
 
-  it('submits a live buy request when order API config is present', async () => {
+  it('submits a live buy request with signed payload metadata when order API config is present', async () => {
     const db = new FakeD1();
     db.tradingAccounts.set('1001:crypto_zh', {
       telegram_user_id: '1001',
@@ -269,6 +269,8 @@ describe('handleTelegramWebhook phase 6', () => {
     const env = makeEnv(db, {
       POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
       POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+      POLYMARKET_BUILDER_TAG: 'newbot-phase8',
     });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -290,10 +292,16 @@ describe('handleTelegramWebhook phase 6', () => {
         expect(init?.headers).toMatchObject({
           authorization: 'Bearer order-key',
         });
+        const headers = init?.headers as Record<string, string>;
+        expect(headers['x-order-signature']).toBeTruthy();
         const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
         expect(payload.market_slug).toBe('btc-break-120k-2026');
         expect(payload.token_id).toBe('111');
         expect(payload.amount_usdc).toBe(50);
+        expect(payload.builder_tag).toBe('newbot-phase8');
+        expect(payload.client_order_id).toMatch(/^nbo-/);
+        expect(typeof payload.timestamp_ms).toBe('number');
+        expect(typeof payload.nonce).toBe('string');
         return new Response(JSON.stringify({ orderId: 'live-ord-123', status: 'submitted' }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });

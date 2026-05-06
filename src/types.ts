@@ -11,6 +11,8 @@ export interface Env {
   BOT_TOKEN_CRYPTO_ZH: string;
   POLYMARKET_ORDER_API_BASE?: string;
   POLYMARKET_ORDER_API_KEY?: string;
+  POLYMARKET_ORDER_SIGNING_SECRET?: string;
+  POLYMARKET_BUILDER_TAG?: string;
 }
 
 export interface TelegramUser {
