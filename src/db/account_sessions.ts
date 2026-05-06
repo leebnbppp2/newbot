@@ -1,8 +1,8 @@
 /**
- * Account-link session helpers for Phase 5.
+ * Account-link session helpers for Phase 6.
  */
-
 import type { Env } from '../types';
+import { upsertTradingAccount } from './users';
 
 export interface AccountLinkSession {
   token: string;
@@ -10,11 +10,19 @@ export interface AccountLinkSession {
 }
 
 export interface AccountLinkSessionLookup {
+  token_hash?: string;
   telegram_user_id: string;
   bot_id: string;
   session_type: string;
   status: string;
   expires_at: string;
+}
+
+export interface CompleteAccountLinkInput {
+  authMode: string;
+  accountLabel: string | null;
+  signerAddress: string | null;
+  funderAddress: string | null;
 }
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -52,13 +60,48 @@ export async function getAccountLinkSessionByToken(
 ): Promise<AccountLinkSessionLookup | null> {
   const tokenHash = await sha256Hex(token);
   return env.DB.prepare(
-    `SELECT telegram_user_id, bot_id, status, expires_at, session_type
+    `SELECT token_hash, telegram_user_id, bot_id, status, expires_at, session_type
        FROM user_account_sessions
       WHERE token_hash = ?
       LIMIT 1`,
   )
     .bind(tokenHash)
     .first<AccountLinkSessionLookup>();
+}
+
+export async function completeAccountLinkSession(
+  env: Env,
+  token: string,
+  input: CompleteAccountLinkInput,
+): Promise<AccountLinkSessionLookup | null> {
+  const session = await getAccountLinkSessionByToken(env, token);
+  if (!session || session.status !== 'open' || Date.parse(session.expires_at) <= Date.now()) {
+    return null;
+  }
+
+  await upsertTradingAccount(env, {
+    telegramUserId: session.telegram_user_id,
+    botId: session.bot_id,
+    authMode: input.authMode,
+    accountLabel: input.accountLabel,
+    signerAddress: input.signerAddress,
+    funderAddress: input.funderAddress,
+  });
+
+  await env.DB.prepare(
+    `UPDATE user_account_sessions
+        SET status = ?,
+            used_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+      WHERE token_hash = ?`,
+  )
+    .bind('linked', new Date().toISOString(), session.token_hash ?? (await sha256Hex(token)))
+    .run();
+
+  return {
+    ...session,
+    status: 'linked',
+  };
 }
 
 async function sha256Hex(input: string): Promise<string> {

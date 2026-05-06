@@ -14,10 +14,23 @@ type AccountSessionRow = {
   session_type: string;
   status: string;
   expires_at: string;
+  used_at?: string | null;
+};
+
+type TradingAccountRow = {
+  telegram_user_id: string;
+  bot_id: string;
+  status: string;
+  auth_mode: string;
+  account_label: string | null;
+  signer_address: string | null;
+  funder_address: string | null;
 };
 
 class FakeD1 {
   accountSessions = new Map<string, AccountSessionRow>();
+
+  tradingAccounts = new Map<string, TradingAccountRow>();
 
   prepare(query: string) {
     return new FakePreparedStatement(this, query);
@@ -55,6 +68,45 @@ class FakePreparedStatement {
 
     throw new Error(`Unsupported first query: ${this.query}`);
   }
+
+  async run() {
+    if (this.query.includes('UPDATE user_account_sessions')) {
+      const [status, usedAt, tokenHash] = this.values as [string, string, string];
+      const existing = this.db.accountSessions.get(tokenHash);
+      if (existing) {
+        this.db.accountSessions.set(tokenHash, {
+          ...existing,
+          status,
+          used_at: usedAt,
+        });
+      }
+      return { success: true };
+    }
+
+    if (this.query.includes('INSERT INTO user_trading_accounts')) {
+      const [telegramUserId, botId, status, authMode, accountLabel, signerAddress, funderAddress] = this.values as [
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+      ];
+      this.db.tradingAccounts.set(`${telegramUserId}:${botId}`, {
+        telegram_user_id: telegramUserId,
+        bot_id: botId,
+        status,
+        auth_mode: authMode,
+        account_label: accountLabel,
+        signer_address: signerAddress,
+        funder_address: funderAddress,
+      });
+      return { success: true };
+    }
+
+    throw new Error(`Unsupported run query: ${this.query}`);
+  }
 }
 
 function makeEnv(db: FakeD1): Env {
@@ -62,7 +114,7 @@ function makeEnv(db: FakeD1): Env {
     DB: db as unknown as D1Database,
     TRADE_COORDINATOR: {} as DurableObjectNamespace,
     APP_ENV: 'test',
-    NEWBOT_VERSION: '0.5.0',
+    NEWBOT_VERSION: '0.6.0',
     TELEGRAM_WEBHOOK_SECRET: 'test-secret',
     BOT_TOKEN_CRYPTO_ZH: 'bot-token',
   };
@@ -72,7 +124,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('phase 5 portal route', () => {
+describe('portal routes', () => {
   it('renders account link portal for a valid session token', async () => {
     const db = new FakeD1();
     const token = 'LINKTOKEN123';
@@ -84,6 +136,7 @@ describe('phase 5 portal route', () => {
       session_type: 'account_link',
       status: 'open',
       expires_at: '2099-01-01T00:00:00.000Z',
+      used_at: null,
     });
 
     const response = await worker.fetch(new Request(`https://example.com/portal/link/${token}`), makeEnv(db));
@@ -93,6 +146,47 @@ describe('phase 5 portal route', () => {
     expect(body).toContain('连接你的交易账户');
     expect(body).toContain(token);
     expect(body).toContain('managed signer');
+  });
+
+  it('completes account linking from portal form submission', async () => {
+    const db = new FakeD1();
+    const token = 'LINKTOKEN456';
+    const tokenHash = await sha256Hex(token);
+    db.accountSessions.set(tokenHash, {
+      token_hash: tokenHash,
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      session_type: 'account_link',
+      status: 'open',
+      expires_at: '2099-01-01T00:00:00.000Z',
+      used_at: null,
+    });
+
+    const response = await worker.fetch(
+      new Request(`https://example.com/portal/link/${token}/complete`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          auth_mode: 'managed_signer',
+          account_label: 'Dora 主账户',
+          signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+          funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        }),
+      }),
+      makeEnv(db),
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(body).toContain('账户已经绑定完成');
+    expect(db.accountSessions.get(tokenHash)?.status).toBe('linked');
+    expect(db.tradingAccounts.get('1001:crypto_zh')).toMatchObject({
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
   });
 });
 

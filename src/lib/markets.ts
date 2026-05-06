@@ -1,5 +1,5 @@
 /**
- * Minimal Polymarket market overview + local search/detail for Phase 5.
+ * Minimal Polymarket market overview + local search/detail for Phase 6.
  */
 
 import {
@@ -8,6 +8,7 @@ import {
   buildMarketSearchReply,
   type BotReply,
   type MarketItem,
+  type MarketOutcome,
 } from '../agent/replies';
 import type { Env } from '../types';
 
@@ -24,6 +25,10 @@ interface GammaMarket {
   question?: string;
   volume?: number | string;
   endDate?: string;
+  slug?: string;
+  outcomes?: string | string[];
+  outcomePrices?: string | Array<string | number>;
+  clobTokenIds?: string | string[];
 }
 
 export async function getMarketOverviewReply(env: Env): Promise<BotReply> {
@@ -56,9 +61,21 @@ export async function getMarketDetailReply(env: Env, rawQuery: string): Promise<
   return buildMarketDetailReply(query, matched[0] ?? null);
 }
 
+export async function findBestMarket(env: Env, rawQuery: string): Promise<MarketItem | null> {
+  const query = rawQuery.trim().toLowerCase();
+  if (!query) {
+    return null;
+  }
+  const matched = await searchMarkets(env, query);
+  return matched[0] ?? null;
+}
+
 async function searchMarkets(env: Env, query: string): Promise<MarketItem[]> {
   const allMarkets = await fetchMarkets();
-  return allMarkets.filter((market) => market.question.toLowerCase().includes(query));
+  return allMarkets.filter((market) => {
+    const haystacks = [market.question, market.slug ?? ''];
+    return haystacks.some((value) => value.toLowerCase().includes(query));
+  });
 }
 
 async function readCache(env: Env, cacheKey: string): Promise<MarketItem[] | null> {
@@ -99,7 +116,7 @@ async function fetchMarkets(): Promise<MarketItem[]> {
   const response = await fetch(BASE_MARKETS_URL, {
     headers: {
       accept: 'application/json',
-      'user-agent': 'NewBot/0.5',
+      'user-agent': 'NewBot/0.6',
     },
   });
 
@@ -118,6 +135,68 @@ async function fetchMarkets(): Promise<MarketItem[]> {
       if (typeof item.endDate === 'string' && item.endDate.length > 0) {
         normalized.endDate = item.endDate;
       }
+      if (typeof item.slug === 'string' && item.slug.length > 0) {
+        normalized.slug = item.slug;
+      }
+      const outcomes = normalizeOutcomes(item);
+      if (outcomes) {
+        normalized.outcomes = outcomes;
+      }
       return normalized;
     });
+}
+
+function normalizeOutcomes(item: GammaMarket): MarketOutcome[] | undefined {
+  const names = parseStringArray(item.outcomes);
+  const prices = parseNumberArray(item.outcomePrices);
+  const tokenIds = parseStringArray(item.clobTokenIds);
+
+  if (names.length === 0) {
+    return undefined;
+  }
+
+  return names.map((name, index) => {
+    const outcome: MarketOutcome = { name };
+    if (typeof prices[index] === 'number' && Number.isFinite(prices[index])) {
+      outcome.price = prices[index];
+    }
+    if (typeof tokenIds[index] === 'string' && tokenIds[index].length > 0) {
+      outcome.tokenId = tokenIds[index];
+    }
+    return outcome;
+  });
+}
+
+function parseStringArray(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value)) {
+    return value.map(String);
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map(String);
+      }
+    } catch {
+      return value.split(',').map((part) => part.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function parseNumberArray(value: string | Array<string | number> | undefined): number[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => Number(item));
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => Number(item));
+      }
+    } catch {
+      return value.split(',').map((part) => Number(part.trim()));
+    }
+  }
+  return [];
 }

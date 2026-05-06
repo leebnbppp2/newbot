@@ -1,11 +1,27 @@
 /**
- * User and account persistence helpers for Phase 2.
+ * User and account persistence helpers for Phase 6.
  */
 
 import type { Env, TelegramMessage, TelegramUser } from '../types';
 
 export interface TradingAccountStatusRow {
   status: string;
+}
+
+export interface TradingAccountRow extends TradingAccountStatusRow {
+  auth_mode: string;
+  account_label: string | null;
+  signer_address: string | null;
+  funder_address: string | null;
+}
+
+export interface UpsertTradingAccountInput {
+  telegramUserId: string;
+  botId: string;
+  authMode: string;
+  accountLabel: string | null;
+  signerAddress: string | null;
+  funderAddress: string | null;
 }
 
 export async function upsertTelegramUser(
@@ -59,6 +75,55 @@ export async function getTradingAccountStatus(
   )
     .bind(telegramUserId, botId)
     .first<TradingAccountStatusRow>();
+}
+
+export async function getTradingAccount(
+  env: Env,
+  telegramUserId: string,
+  botId: string,
+): Promise<TradingAccountRow | null> {
+  return env.DB.prepare(
+    `SELECT status, auth_mode, account_label, signer_address, funder_address
+       FROM user_trading_accounts
+      WHERE telegram_user_id = ? AND bot_id = ?
+      LIMIT 1`,
+  )
+    .bind(telegramUserId, botId)
+    .first<TradingAccountRow>();
+}
+
+export async function upsertTradingAccount(env: Env, input: UpsertTradingAccountInput): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO user_trading_accounts (
+      telegram_user_id,
+      bot_id,
+      status,
+      auth_mode,
+      account_label,
+      signer_address,
+      funder_address,
+      last_verified_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(telegram_user_id, bot_id) DO UPDATE SET
+      status = excluded.status,
+      auth_mode = excluded.auth_mode,
+      account_label = excluded.account_label,
+      signer_address = excluded.signer_address,
+      funder_address = excluded.funder_address,
+      last_verified_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP`,
+  )
+    .bind(
+      input.telegramUserId,
+      input.botId,
+      'active',
+      input.authMode,
+      input.accountLabel,
+      input.signerAddress,
+      input.funderAddress,
+    )
+    .run();
 }
 
 function normalizeLanguageCode(user: TelegramUser): string {

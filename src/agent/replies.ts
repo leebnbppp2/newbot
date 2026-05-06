@@ -1,6 +1,8 @@
 /**
- * Simple Phase 5 reply builders.
+ * Simple Phase 6 reply builders.
  */
+import type { TradeEventRow } from '../db/trade_events';
+import type { TradingAccountRow } from '../db/users';
 
 export interface TelegramMenuMarkup {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
@@ -11,10 +13,18 @@ export interface BotReply {
   replyMarkup?: TelegramMenuMarkup;
 }
 
+export interface MarketOutcome {
+  name: string;
+  price?: number;
+  tokenId?: string;
+}
+
 export interface MarketItem {
   question: string;
   volume: number;
   endDate?: string;
+  slug?: string;
+  outcomes?: MarketOutcome[];
 }
 
 export function buildStartReply(): BotReply {
@@ -28,10 +38,18 @@ export function buildStartReply(): BotReply {
   };
 }
 
-export function buildAccountReply(hasLinkedAccount: boolean): BotReply {
-  if (hasLinkedAccount) {
+export function buildAccountReply(account: TradingAccountRow | null): BotReply {
+  if (account) {
+    const signerTail = account.signer_address ? shortenAddress(account.signer_address) : '待补充';
     return {
-      text: '你的交易账户已经绑定好了。下一步我会继续带你接入下单和持仓视图。',
+      text: [
+        '你的交易账户已经绑定好了。',
+        account.account_label ? `账户名：${account.account_label}` : '账户名：未设置',
+        `接入方式：${formatAuthMode(account.auth_mode)}`,
+        `Signer：${signerTail}`,
+        account.funder_address ? `Funder：${shortenAddress(account.funder_address)}` : 'Funder：待补充',
+        '现在你可以继续看市场、记订单，下一步再把真实下单接口接上。',
+      ].join('\n'),
       replyMarkup: buildMainMenuMarkup(),
     };
   }
@@ -53,7 +71,7 @@ export function buildLinkAccountReply(linkCode: string, expiresAt: string): BotR
       '绑定入口已经给你准备好了。',
       `链接口令：${linkCode}`,
       `有效期到：${expiresAt.slice(0, 16).replace('T', ' ')}`,
-      '下一步我会把它接到真实钱包 / managed signer 流程，现在先把入口和状态打通。',
+      '下一步直接打开 portal 填一下账户信息，就能把绑定状态真正写进系统。',
     ].join('\n'),
     replyMarkup: buildMainMenuMarkup(),
   };
@@ -62,7 +80,7 @@ export function buildLinkAccountReply(linkCode: string, expiresAt: string): BotR
 export function buildTradeEntryReply(hasLinkedAccount: boolean): BotReply {
   if (hasLinkedAccount) {
     return {
-      text: '下单前确认流的骨架已经准备好了。下一步我会接真实市场选择、金额确认和最终下单。',
+      text: '下单前确认流已经往前推进了一步。你现在可以直接发 /buy btc yes 50 这种格式先走模拟下单。',
       replyMarkup: buildMainMenuMarkup(),
     };
   }
@@ -81,9 +99,9 @@ export function buildTradeEntryReply(hasLinkedAccount: boolean): BotReply {
 export function buildBuyConfirmReply(amountText: string): BotReply {
   return {
     text: [
-      '下单确认占位已经准备好了。',
-      `本次计划金额：${amountText} USDC`,
-      '下一步我会把它接成：选市场 → 选方向 → 最终确认 → 提交订单。',
+      '下单确认占位已经升级了。',
+      `如果你只是先试金额，本次计划金额：${amountText} USDC。`,
+      '想直接记一笔模拟单，可以发：/buy btc yes 50',
     ].join('\n'),
     replyMarkup: {
       inline_keyboard: [
@@ -91,6 +109,61 @@ export function buildBuyConfirmReply(amountText: string): BotReply {
         [{ text: '我的账户', callback_data: 'account_status' }],
       ],
     },
+  };
+}
+
+export function buildSubmittedBuyReply(market: MarketItem, outcome: string, amountUsdc: number, orderId: string): BotReply {
+  return {
+    text: [
+      '模拟下单已经记录。',
+      `${market.question}`,
+      `方向：${outcome}`,
+      `金额：${amountUsdc} USDC`,
+      `订单号：${orderId}`,
+      '你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。',
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '看市场', callback_data: 'market_overview' }],
+        [{ text: '我的账户', callback_data: 'account_status' }],
+      ],
+    },
+  };
+}
+
+export function buildOrdersReply(events: TradeEventRow[]): BotReply {
+  if (events.length === 0) {
+    return {
+      text: '你这边还没有订单记录。先绑定账户，然后可以直接发 /buy btc yes 50 先记一笔模拟单。',
+      replyMarkup: buildMainMenuMarkup(),
+    };
+  }
+
+  const lines = events.slice(0, 5).map((event, index) => (
+    `${index + 1}. ${event.market_slug}\n   ${event.outcome} · ${event.amount_usdc} USDC · ${event.status}`
+  ));
+
+  return {
+    text: [`最近 ${Math.min(events.length, 5)} 条订单记录：`, ...lines].join('\n'),
+    replyMarkup: buildMainMenuMarkup(),
+  };
+}
+
+export function buildPositionsReply(events: TradeEventRow[]): BotReply {
+  if (events.length === 0) {
+    return {
+      text: '你这边还没有可展示的仓位。等你先记下几笔订单后，我就能把它们整理成持仓视图。',
+      replyMarkup: buildMainMenuMarkup(),
+    };
+  }
+
+  const lines = events.slice(0, 5).map((event, index) => (
+    `${index + 1}. ${event.market_slug}\n   ${event.outcome} 方向 · ${event.amount_usdc} USDC`
+  ));
+
+  return {
+    text: ['当前记录里的模拟仓位：', ...lines].join('\n'),
+    replyMarkup: buildMainMenuMarkup(),
   };
 }
 
@@ -151,13 +224,19 @@ export function buildMarketDetailReply(query: string, market: MarketItem | null)
     };
   }
 
+  const outcomeLine = market.outcomes?.length
+    ? `方向：${market.outcomes.map((outcome) => `${outcome.name}${typeof outcome.price === 'number' ? ` ${Math.round(outcome.price * 100)}%` : ''}`).join(' / ')}`
+    : '方向数据待补充';
+
   return {
     text: [
       '你先看这个市场：',
       market.question,
+      market.slug ? `Slug：${market.slug}` : 'Slug：待补充',
       `成交额 ${formatUsd(market.volume)}`,
       market.endDate ? `截止 ${market.endDate.slice(0, 10)}` : '截止时间待确认',
-      '如果你想继续，直接发 /buy 50，我就把它带到下单前确认流。',
+      outcomeLine,
+      '如果你想继续，直接发 /buy 50 看金额入口，或者发 /buy btc yes 50 这种格式，我就先帮你记一笔模拟单。',
     ].join('\n'),
     replyMarkup: {
       inline_keyboard: [
@@ -175,7 +254,7 @@ export function buildGettingStartedReply(): BotReply {
       '1. 先点“看市场”，熟悉现在有哪些热门盘。',
       '2. 再点“我的账户”，确认自己是不是已经绑定。',
       '3. 需要的话直接发 /link，先把账户接入入口拿到。',
-      '4. 等下一阶段接上下单前确认流，再决定要不要真实交易。',
+      '4. 绑定后可以先发 /buy btc yes 50，走一遍模拟订单链路。',
     ].join('\n'),
     replyMarkup: buildMainMenuMarkup(),
   };
@@ -183,7 +262,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 5 已经支持 /start、/account、/market、/find、/detail、/link、/buy，也可以直接点菜单继续走。',
+    text: '我先记下了。现在 Phase 6 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/positions，也可以直接点菜单继续走。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -209,4 +288,15 @@ function formatUsd(value: number): string {
     return `$${(value / 1_000).toFixed(0)}K`;
   }
   return `$${value.toFixed(0)}`;
+}
+
+function shortenAddress(value: string): string {
+  if (value.length <= 12) {
+    return value;
+  }
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function formatAuthMode(value: string): string {
+  return value.replaceAll('_', ' ');
 }

@@ -1,5 +1,5 @@
 /**
- * Telegram webhook route with persona lookup and Phase 4 onboarding/market behavior.
+ * Telegram webhook route with persona lookup and Phase 6 onboarding/market behavior.
  */
 
 import {
@@ -8,13 +8,17 @@ import {
   buildDefaultReply,
   buildGettingStartedReply,
   buildLinkAccountReply,
+  buildOrdersReply,
+  buildPositionsReply,
   buildStartReply,
+  buildSubmittedBuyReply,
   buildTradeEntryReply,
 } from '../agent/replies';
 import { createAccountLinkSession } from '../db/account_sessions';
 import { appendConversationTurn } from '../db/conversations';
-import { getTradingAccountStatus, upsertTelegramUser } from '../db/users';
-import { getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
+import { createTradeEvent, listRecentTradeEvents } from '../db/trade_events';
+import { getTradingAccount, getTradingAccountStatus, upsertTelegramUser } from '../db/users';
+import { findBestMarket, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
@@ -102,8 +106,8 @@ async function resolveReply(
   }
 
   if (normalized === '/account' || normalized === '/status') {
-    const account = await getTradingAccountStatus(env, telegramUserId, botId);
-    return buildAccountReply(Boolean(account));
+    const account = await getTradingAccount(env, telegramUserId, botId);
+    return buildAccountReply(account);
   }
 
   if (normalized === '/link') {
@@ -112,6 +116,16 @@ async function resolveReply(
 
   if (normalized === '/market' || normalized === '/markets') {
     return getMarketOverviewReply(env);
+  }
+
+  if (normalized === '/orders') {
+    const events = await listRecentTradeEvents(env, telegramUserId, botId);
+    return buildOrdersReply(events);
+  }
+
+  if (normalized === '/positions') {
+    const events = await listRecentTradeEvents(env, telegramUserId, botId);
+    return buildPositionsReply(events);
   }
 
   if (normalized.startsWith('/find ') || normalized.startsWith('/search ')) {
@@ -129,14 +143,7 @@ async function resolveReply(
   }
 
   if (normalized.startsWith('/buy ')) {
-    const amountText = normalized.replace(/^\/buy\s+/, '').trim();
-    if (amountText.length > 0) {
-      const account = await getTradingAccountStatus(env, telegramUserId, botId);
-      if (!account) {
-        return buildTradeEntryReply(false);
-      }
-      return buildBuyConfirmReply(amountText);
-    }
+    return resolveBuyReply(env, botId, telegramUserId, text.trim());
   }
 
   return buildDefaultReply();
@@ -152,8 +159,8 @@ async function resolveCallbackReply(
     case 'market_overview':
       return getMarketOverviewReply(env);
     case 'account_status': {
-      const account = await getTradingAccountStatus(env, telegramUserId, botId);
-      return buildAccountReply(Boolean(account));
+      const account = await getTradingAccount(env, telegramUserId, botId);
+      return buildAccountReply(account);
     }
     case 'getting_started':
       return buildGettingStartedReply();
@@ -171,4 +178,70 @@ async function resolveCallbackReply(
 async function createLinkAccountReply(env: Env, telegramUserId: string, botId: string) {
   const session = await createAccountLinkSession(env, telegramUserId, botId);
   return buildLinkAccountReply(session.token, session.expiresAt);
+}
+
+async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, rawText: string) {
+  const account = await getTradingAccountStatus(env, telegramUserId, botId);
+  if (!account) {
+    return buildTradeEntryReply(false);
+  }
+
+  const argumentText = rawText.replace(/^\/buy\s+/i, '').trim();
+  const segments = argumentText.split(/\s+/).filter(Boolean);
+
+  if (segments.length === 1) {
+    return buildBuyConfirmReply(segments[0] ?? argumentText);
+  }
+
+  if (segments.length < 3) {
+    return buildBuyConfirmReply(argumentText);
+  }
+
+  const amountText = segments.at(-1) ?? '';
+  const outcomeRaw = segments.at(-2) ?? '';
+  const marketQuery = segments.slice(0, -2).join(' ');
+  const amountUsdc = Number(amountText);
+  const normalizedOutcome = normalizeOutcome(outcomeRaw);
+
+  if (!marketQuery || !Number.isFinite(amountUsdc) || amountUsdc <= 0 || !normalizedOutcome) {
+    return buildBuyConfirmReply(argumentText);
+  }
+
+  const market = await findBestMarket(env, marketQuery);
+  if (!market) {
+    return getMarketDetailReply(env, marketQuery);
+  }
+
+  const selectedOutcome = market.outcomes?.find((outcome) => outcome.name.toLowerCase() === normalizedOutcome.toLowerCase());
+  const orderId = `sim-${Date.now()}`;
+  await createTradeEvent(env, {
+    telegramUserId,
+    botId,
+    eventType: 'buy',
+    marketSlug: market.slug ?? market.question,
+    outcome: selectedOutcome?.name ?? normalizedOutcome,
+    tokenId: selectedOutcome?.tokenId ?? 'simulated-token',
+    amountUsdc,
+    status: 'simulated_submitted',
+    orderId,
+    payloadJson: JSON.stringify({
+      marketQuestion: market.question,
+      outcome: selectedOutcome?.name ?? normalizedOutcome,
+      price: selectedOutcome?.price ?? null,
+      simulated: true,
+    }),
+  });
+
+  return buildSubmittedBuyReply(market, selectedOutcome?.name ?? normalizedOutcome, amountUsdc, orderId);
+}
+
+function normalizeOutcome(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'yes') {
+    return 'Yes';
+  }
+  if (normalized === 'no') {
+    return 'No';
+  }
+  return null;
 }

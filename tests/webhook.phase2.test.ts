@@ -120,6 +120,21 @@ class FakePreparedStatement {
   }
 
   async first<T>() {
+    if (this.query.includes('SELECT status, auth_mode, account_label, signer_address, funder_address')) {
+      const [telegramUserId, botId] = this.values as [string, string];
+      const row = this.db.tradingAccounts.get(`${telegramUserId}:${botId}`) ?? null;
+      if (!row) {
+        return null;
+      }
+      return {
+        status: row.status,
+        auth_mode: 'managed_signer',
+        account_label: null,
+        signer_address: null,
+        funder_address: null,
+      } as T;
+    }
+
     if (this.query.includes('SELECT status FROM user_trading_accounts')) {
       const [telegramUserId, botId] = this.values as [string, string];
       return (this.db.tradingAccounts.get(`${telegramUserId}:${botId}`) ?? null) as T | null;
