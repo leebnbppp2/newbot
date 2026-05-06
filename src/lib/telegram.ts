@@ -1,5 +1,5 @@
 /**
- * Minimal Telegram API helpers for sending/editing messages during Phase 1.
+ * Minimal Telegram API helpers for sending/editing messages during Phase 3.
  */
 
 import type { BotReply } from '../agent/replies';
@@ -24,15 +24,19 @@ async function telegramApi(
   });
 }
 
+function normalizeReply(reply: string | BotReply): BotReply {
+  return typeof reply === 'string'
+    ? { text: reply }
+    : reply;
+}
+
 export async function sendTelegramMessage(
   env: Env,
   secretName: 'BOT_TOKEN_CRYPTO_ZH',
   chatId: number | string,
   reply: string | BotReply,
 ): Promise<void> {
-  const normalizedReply = typeof reply === 'string'
-    ? { text: reply }
-    : reply;
+  const normalizedReply = normalizeReply(reply);
 
   const response = await telegramApi(env, secretName, 'sendMessage', {
     chat_id: chatId,
@@ -50,12 +54,15 @@ export async function editTelegramMessage(
   secretName: 'BOT_TOKEN_CRYPTO_ZH',
   chatId: number | string,
   messageId: number,
-  text: string,
+  reply: string | BotReply,
 ): Promise<void> {
+  const normalizedReply = normalizeReply(reply);
+
   const response = await telegramApi(env, secretName, 'editMessageText', {
     chat_id: chatId,
     message_id: messageId,
-    text,
+    text: normalizedReply.text,
+    reply_markup: normalizedReply.replyMarkup,
   });
   if (!response.ok) {
     const detail = await response.text();

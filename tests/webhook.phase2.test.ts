@@ -26,12 +26,21 @@ type TradingAccountRow = {
   status: string;
 };
 
+type MarketCacheRow = {
+  slug: string;
+  data_json: string;
+  fetched_at: string;
+  expires_at: string;
+};
+
 class FakeD1 {
   users = new Map<string, UserRow>();
 
   conversations: ConversationRow[] = [];
 
   tradingAccounts = new Map<string, TradingAccountRow>();
+
+  marketCache = new Map<string, MarketCacheRow>();
 
   prepare(query: string) {
     return new FakePreparedStatement(this, query);
@@ -72,6 +81,17 @@ class FakePreparedStatement {
       return { success: true };
     }
 
+    if (this.query.includes('INSERT INTO market_cache')) {
+      const [slug, dataJson, fetchedAt, expiresAt] = this.values as [string, string, string, string];
+      this.db.marketCache.set(slug, {
+        slug,
+        data_json: dataJson,
+        fetched_at: fetchedAt,
+        expires_at: expiresAt,
+      });
+      return { success: true };
+    }
+
     throw new Error(`Unsupported run query in test fake: ${this.query}`);
   }
 
@@ -89,6 +109,15 @@ class FakePreparedStatement {
       return { max_turn_id: maxTurnId } as T;
     }
 
+    if (this.query.includes('SELECT data_json, expires_at FROM market_cache')) {
+      const [slug] = this.values as [string];
+      const row = this.db.marketCache.get(slug) ?? null;
+      if (!row) {
+        return null;
+      }
+      return { data_json: row.data_json, expires_at: row.expires_at } as T;
+    }
+
     throw new Error(`Unsupported first query in test fake: ${this.query}`);
   }
 }
@@ -98,7 +127,7 @@ function makeEnv(db: FakeD1): Env {
     DB: db as unknown as D1Database,
     TRADE_COORDINATOR: {} as DurableObjectNamespace,
     APP_ENV: 'test',
-    NEWBOT_VERSION: '0.2.0',
+    NEWBOT_VERSION: '0.3.0',
     TELEGRAM_WEBHOOK_SECRET: 'test-secret',
     BOT_TOKEN_CRYPTO_ZH: 'bot-token',
   };
@@ -130,11 +159,41 @@ function makeMessageRequest(text: string) {
   });
 }
 
+function makeCallbackRequest(data: string) {
+  return new Request('https://example.com/telegram/webhook/crypto_zh', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-telegram-bot-api-secret-token': 'test-secret',
+    },
+    body: JSON.stringify({
+      update_id: 2,
+      callback_query: {
+        id: 'cbq-1',
+        data,
+        from: {
+          id: 1001,
+          is_bot: false,
+          first_name: 'Dora',
+          last_name: 'Lee',
+          username: 'dora',
+          language_code: 'zh-hans',
+        },
+        message: {
+          message_id: 77,
+          text: 'old menu',
+          chat: { id: 2001, type: 'private' },
+        },
+      },
+    }),
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('handleTelegramWebhook phase 2', () => {
+describe('handleTelegramWebhook phase 3', () => {
   it('stores user and conversation history, then sends a Chinese start menu', async () => {
     const db = new FakeD1();
     const env = makeEnv(db);
@@ -158,7 +217,6 @@ describe('handleTelegramWebhook phase 2', () => {
     expect(db.conversations[0]).toMatchObject({ role: 'user', content: '/start' });
     expect(db.conversations[1]?.role).toBe('assistant');
     expect(db.conversations[1]?.content).toContain('欢迎');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as {
@@ -167,29 +225,85 @@ describe('handleTelegramWebhook phase 2', () => {
     };
 
     expect(payload.text).toContain('欢迎来到 NewBot');
-    expect(payload.text).toContain('先看市场');
     expect(payload.reply_markup?.inline_keyboard).toEqual([
+      [{ text: '看市场', callback_data: 'market_overview' }],
       [{ text: '我的账户', callback_data: 'account_status' }],
       [{ text: '怎么开始', callback_data: 'getting_started' }],
     ]);
   });
 
-  it('returns account status for unlinked users', async () => {
+  it('returns market overview and caches it', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/markets?')) {
+        return new Response(JSON.stringify([
+          {
+            question: 'Will BTC break 120k in 2026?',
+            volume: 1234567,
+            endDate: '2026-12-31T00:00:00Z',
+          },
+          {
+            question: 'Will ETH ETF inflows beat BTC next quarter?',
+            volume: 456789,
+            endDate: '2026-09-30T00:00:00Z',
+          },
+          {
+            question: 'Will SOL hit a new ATH this year?',
+            volume: 222333,
+            endDate: '2026-10-01T00:00:00Z',
+          },
+        ]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/market'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('gamma-api.polymarket.com/markets');
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('先看 3 个活跃市场');
+    expect(payload.text).toContain('BTC break 120k');
+    expect(db.marketCache.get('frontpage_overview')).toBeTruthy();
+    expect(db.conversations[0]?.content).toBe('/market');
+    expect(db.conversations[1]?.content).toContain('先看 3 个活跃市场');
+  });
+
+  it('handles account callback by answering and editing message text', async () => {
     const db = new FakeD1();
     const env = makeEnv(db);
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
 
-    const response = await handleTelegramWebhook(makeMessageRequest('/account'), env, 'crypto_zh');
+    const response = await handleTelegramWebhook(makeCallbackRequest('account_status'), env, 'crypto_zh');
 
     expect(response.status).toBe(200);
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/answerCallbackQuery');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/editMessageText');
+
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('还没绑定交易账户');
-    expect(payload.text).toContain('后面我会带你完成');
-    expect(db.conversations).toHaveLength(2);
-    expect(db.conversations[0]?.content).toBe('/account');
+    expect(db.conversations[0]?.content).toBe('[callback] account_status');
     expect(db.conversations[1]?.content).toContain('还没绑定交易账户');
+  });
+
+  it('returns 200 instead of crashing when telegram edit fails during callback handling', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('bad request', { status: 400 }));
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('getting_started'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
