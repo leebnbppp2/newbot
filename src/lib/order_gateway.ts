@@ -1,8 +1,9 @@
 /**
- * Phase 8 order gateway: signed live payload prep with live-or-simulated fallback.
+ * Phase 9 order gateway: auth-mode aware signing prep + live status refresh.
  */
 
 import type { MarketItem } from '../agent/replies';
+import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
 import type { Env } from '../types';
 
@@ -49,10 +50,12 @@ export async function executeBuyOrder(
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     authorization: `Bearer ${liveConfig.apiKey}`,
+    'x-auth-mode': input.account.auth_mode,
+    'x-signature-type': String(requestBody.signature_type),
   };
 
   if (liveConfig.signingSecret) {
-    headers['x-order-signature'] = await signPayload(requestBody, liveConfig.signingSecret);
+    headers['x-order-signature'] = await signPayload(requestBody, liveConfig.signingSecret, input.account.auth_mode);
   }
 
   const response = await fetch(`${liveConfig.baseUrl}/orders`, {
@@ -68,14 +71,38 @@ export async function executeBuyOrder(
 
   return {
     mode: 'live',
-    status: payload.status === 'submitted' ? 'live_submitted' : (payload.status ?? 'live_submitted'),
+    status: normalizeLiveStatus(payload.status),
     orderId: payload.orderId ?? String(requestBody.client_order_id),
     detail: {
       ...payload,
       request: requestBody,
       signed: Boolean(liveConfig.signingSecret),
+      auth_mode: input.account.auth_mode,
     },
   };
+}
+
+export async function enrichTradeEventsWithLiveStatus(env: Env, events: TradeEventRow[]): Promise<TradeEventRow[]> {
+  const liveConfig = getLiveOrderConfig(env);
+  if (!liveConfig) {
+    return events;
+  }
+
+  const updated = await Promise.all(events.map(async (event) => {
+    if (!event.order_id || !event.status.startsWith('live_')) {
+      return event;
+    }
+    const status = await fetchLiveOrderStatus(liveConfig, event.order_id);
+    if (!status) {
+      return event;
+    }
+    return {
+      ...event,
+      status,
+    };
+  }));
+
+  return updated;
 }
 
 function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
@@ -96,6 +123,7 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
   const timestampMs = Date.now();
   const clientOrderId = `nbo-${timestampMs}-${crypto.randomUUID().slice(0, 8)}`;
   const nonce = crypto.randomUUID().replaceAll('-', '');
+  const signatureType = input.account.auth_mode === 'managed_signer' ? 'clob_delegate' : 'clob_wallet';
 
   return {
     market_slug: input.market.slug ?? input.market.question,
@@ -111,12 +139,13 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
     timestamp_ms: timestampMs,
     nonce,
     builder_tag: builderTag,
-    signature_type: input.account.auth_mode === 'managed_signer' ? 'delegated_api' : 'wallet_signature',
+    signature_type: signatureType,
+    protocol: 'polymarket_clob_v1',
   };
 }
 
-async function signPayload(payload: Record<string, unknown>, signingSecret: string): Promise<string> {
-  const encodedSecret = new TextEncoder().encode(signingSecret);
+async function signPayload(payload: Record<string, unknown>, signingSecret: string, authMode: string): Promise<string> {
+  const encodedSecret = new TextEncoder().encode(`${authMode}:${signingSecret}`);
   const key = await crypto.subtle.importKey(
     'raw',
     encodedSecret,
@@ -127,6 +156,33 @@ async function signPayload(payload: Record<string, unknown>, signingSecret: stri
   const encodedPayload = new TextEncoder().encode(JSON.stringify(payload));
   const signature = await crypto.subtle.sign('HMAC', key, encodedPayload);
   return toHex(signature);
+}
+
+async function fetchLiveOrderStatus(config: LiveOrderConfig, orderId: string): Promise<string | null> {
+  const response = await fetch(`${config.baseUrl}/orders/${encodeURIComponent(orderId)}`, {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${config.apiKey}`,
+    },
+  });
+  if (!response.ok) {
+    return null;
+  }
+  const payload = (await safeJson(response)) as { status?: string };
+  return normalizeLiveStatus(payload.status);
+}
+
+function normalizeLiveStatus(status: string | undefined): string {
+  if (status === 'submitted') {
+    return 'live_submitted';
+  }
+  if (status === 'matched') {
+    return 'live_matched';
+  }
+  if (status === 'cancelled') {
+    return 'live_cancelled';
+  }
+  return status ?? 'live_submitted';
 }
 
 function toHex(input: ArrayBuffer): string {

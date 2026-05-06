@@ -19,7 +19,7 @@ import { appendConversationTurn } from '../db/conversations';
 import { createTradeEvent, listRecentTradeEvents } from '../db/trade_events';
 import { getTradingAccount, getTradingAccountStatus, upsertTelegramUser } from '../db/users';
 import { findBestMarket, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
-import { executeBuyOrder } from '../lib/order_gateway';
+import { enrichTradeEventsWithLiveStatus, executeBuyOrder } from '../lib/order_gateway';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
@@ -121,7 +121,8 @@ async function resolveReply(
 
   if (normalized === '/orders') {
     const events = await listRecentTradeEvents(env, telegramUserId, botId);
-    return buildOrdersReply(events);
+    const enrichedEvents = await enrichTradeEventsWithLiveStatus(env, events);
+    return buildOrdersReply(enrichedEvents);
   }
 
   if (normalized === '/positions') {

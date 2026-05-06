@@ -152,7 +152,7 @@ export function buildOrdersReply(events: TradeEventRow[]): BotReply {
   }
 
   const lines = events.slice(0, 5).map((event, index) => (
-    `${index + 1}. ${event.market_slug}\n   ${event.outcome} · ${event.amount_usdc} USDC · ${event.status}`
+    `${index + 1}. ${event.market_slug}\n   ${event.outcome} · ${event.amount_usdc} USDC · ${event.status}${event.order_id ? ` · ${event.order_id}` : ''}`
   ));
 
   return {

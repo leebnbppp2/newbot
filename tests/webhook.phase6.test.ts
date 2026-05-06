@@ -299,6 +299,7 @@ describe('handleTelegramWebhook phase 6', () => {
         expect(payload.token_id).toBe('111');
         expect(payload.amount_usdc).toBe(50);
         expect(payload.builder_tag).toBe('newbot-phase8');
+        expect(payload.signature_type).toBe('clob_delegate');
         expect(payload.client_order_id).toMatch(/^nbo-/);
         expect(typeof payload.timestamp_ms).toBe('number');
         expect(typeof payload.nonce).toBe('string');
@@ -321,6 +322,106 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('真实下单请求已经发出');
+    expect(payload.text).toContain('live-ord-123');
+  });
+
+  it('submits a live buy request with wallet-signature metadata when wallet mode is present', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'wallet_signature',
+      account_label: 'Dora 钱包账户',
+      signer_address: '0x9999999990abcdef1234567890abcdef12345678',
+      funder_address: '0x88888888abcdefabcdefabcdefabcdefabcdefab',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+      POLYMARKET_BUILDER_TAG: 'newbot-phase9',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify([
+          {
+            question: 'Will BTC break 120k in 2026?',
+            volume: 1234567,
+            endDate: '2026-12-31T00:00:00Z',
+            slug: 'btc-break-120k-2026',
+            outcomes: '["Yes","No"]',
+            outcomePrices: '["0.61","0.39"]',
+            clobTokenIds: '["111","222"]',
+          },
+        ]), { status: 200 });
+      }
+      if (url === 'https://orders.example.com/orders') {
+        const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        expect(payload.signature_type).toBe('clob_wallet');
+        expect(payload.builder_tag).toBe('newbot-phase9');
+        return new Response(JSON.stringify({ orderId: 'live-wallet-1', status: 'submitted' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/buy btc yes 50'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(db.tradeEvents).toHaveLength(1);
+    expect(db.tradeEvents[0]).toMatchObject({
+      status: 'live_submitted',
+      order_id: 'live-wallet-1',
+    });
+    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('真实下单请求已经发出');
+  });
+
+  it('shows refreshed live order status in /orders when status api config is present', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    db.tradeEvents.push({
+      id: 1,
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      event_type: 'buy',
+      market_slug: 'btc-break-120k-2026',
+      outcome: 'Yes',
+      token_id: '111',
+      amount_usdc: 50,
+      status: 'live_submitted',
+      order_id: 'live-ord-123',
+      payload_json: '{}',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === 'https://orders.example.com/orders/live-ord-123') {
+        return new Response(JSON.stringify({ orderId: 'live-ord-123', status: 'matched' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/orders'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('matched');
     expect(payload.text).toContain('live-ord-123');
   });
 
