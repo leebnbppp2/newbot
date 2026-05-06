@@ -9,6 +9,8 @@ export interface Env {
   NEWBOT_VERSION?: string;
   TELEGRAM_WEBHOOK_SECRET: string;
   BOT_TOKEN_CRYPTO_ZH: string;
+  POLYMARKET_ORDER_API_BASE?: string;
+  POLYMARKET_ORDER_API_KEY?: string;
 }
 
 export interface TelegramUser {

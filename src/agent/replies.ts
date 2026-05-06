@@ -112,15 +112,27 @@ export function buildBuyConfirmReply(amountText: string): BotReply {
   };
 }
 
-export function buildSubmittedBuyReply(market: MarketItem, outcome: string, amountUsdc: number, orderId: string): BotReply {
+export function buildSubmittedBuyReply(
+  market: MarketItem,
+  outcome: string,
+  amountUsdc: number,
+  orderId: string,
+  mode: 'live' | 'simulated',
+  status: string,
+): BotReply {
+  const title = mode === 'live' ? '真实下单请求已经发出。' : '模拟下单已经记录。';
+  const tail = mode === 'live'
+    ? '你现在可以发 /orders 看状态，后面我再把真实成交和回执细节接进来。'
+    : '还没接入真实下单 API，所以这笔先按模拟单记录。你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。';
   return {
     text: [
-      '模拟下单已经记录。',
+      title,
       `${market.question}`,
       `方向：${outcome}`,
       `金额：${amountUsdc} USDC`,
       `订单号：${orderId}`,
-      '你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。',
+      `状态：${status}`,
+      tail,
     ].join('\n'),
     replyMarkup: {
       inline_keyboard: [

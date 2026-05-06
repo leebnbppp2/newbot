@@ -19,6 +19,7 @@ import { appendConversationTurn } from '../db/conversations';
 import { createTradeEvent, listRecentTradeEvents } from '../db/trade_events';
 import { getTradingAccount, getTradingAccountStatus, upsertTelegramUser } from '../db/users';
 import { findBestMarket, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
+import { executeBuyOrder } from '../lib/order_gateway';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
@@ -181,7 +182,12 @@ async function createLinkAccountReply(env: Env, telegramUserId: string, botId: s
 }
 
 async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, rawText: string) {
-  const account = await getTradingAccountStatus(env, telegramUserId, botId);
+  const accountStatus = await getTradingAccountStatus(env, telegramUserId, botId);
+  if (!accountStatus) {
+    return buildTradeEntryReply(false);
+  }
+
+  const account = await getTradingAccount(env, telegramUserId, botId);
   if (!account) {
     return buildTradeEntryReply(false);
   }
@@ -213,7 +219,14 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
   }
 
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.name.toLowerCase() === normalizedOutcome.toLowerCase());
-  const orderId = `sim-${Date.now()}`;
+  const execution = await executeBuyOrder(env, {
+    market,
+    outcome: selectedOutcome?.name ?? normalizedOutcome,
+    tokenId: selectedOutcome?.tokenId ?? 'simulated-token',
+    amountUsdc,
+    account,
+  });
+
   await createTradeEvent(env, {
     telegramUserId,
     botId,
@@ -222,17 +235,25 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
     outcome: selectedOutcome?.name ?? normalizedOutcome,
     tokenId: selectedOutcome?.tokenId ?? 'simulated-token',
     amountUsdc,
-    status: 'simulated_submitted',
-    orderId,
+    status: execution.status,
+    orderId: execution.orderId,
     payloadJson: JSON.stringify({
       marketQuestion: market.question,
       outcome: selectedOutcome?.name ?? normalizedOutcome,
       price: selectedOutcome?.price ?? null,
-      simulated: true,
+      mode: execution.mode,
+      detail: execution.detail,
     }),
   });
 
-  return buildSubmittedBuyReply(market, selectedOutcome?.name ?? normalizedOutcome, amountUsdc, orderId);
+  return buildSubmittedBuyReply(
+    market,
+    selectedOutcome?.name ?? normalizedOutcome,
+    amountUsdc,
+    execution.orderId,
+    execution.mode,
+    execution.status,
+  );
 }
 
 function normalizeOutcome(value: string): string | null {
