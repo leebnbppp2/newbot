@@ -47,20 +47,25 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 3 行为
+## 当前 Phase 4 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
 - Telegram 文本指令：
   - `/start` 或 `/menu` → 中文欢迎词 + 主菜单
   - `/account` 或 `/status` → 返回账户是否已绑定
+  - `/link` → 生成账户绑定入口口令并写入 `user_account_sessions`
   - `/market` 或 `/markets` → 拉取并展示 3 个活跃市场
-  - 其他文本 → 先记录对话，再返回 Phase 3 引导文案
+  - `/find <关键词>` / `/search <关键词>` → 在活跃市场里做本地关键词筛选
+  - 其他文本 → 先记录对话，再返回 Phase 4 引导文案
 - Telegram 菜单按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
   - `怎么开始` → callback 后直接刷新成开始指引
+  - `开始绑定` → callback 后创建绑定口令
+  - `准备下单` → callback 后进入下单前确认占位；未绑定时会先引导绑定
 - 数据落库：
   - `users` 会 upsert Telegram 用户资料
   - `conversations` 会记录 user / assistant 双向对话
-  - `market_cache` 会缓存市场概览，减少重复请求
+  - `market_cache` 会缓存市场概览和搜索结果
+  - `user_account_sessions` 会生成账户接入会话占位

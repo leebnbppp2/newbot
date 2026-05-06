@@ -1,16 +1,19 @@
 /**
- * Telegram webhook route with persona lookup and Phase 3 onboarding/market behavior.
+ * Telegram webhook route with persona lookup and Phase 4 onboarding/market behavior.
  */
 
 import {
   buildAccountReply,
   buildDefaultReply,
   buildGettingStartedReply,
+  buildLinkAccountReply,
   buildStartReply,
+  buildTradeEntryReply,
 } from '../agent/replies';
+import { createAccountLinkSession } from '../db/account_sessions';
 import { appendConversationTurn } from '../db/conversations';
 import { getTradingAccountStatus, upsertTelegramUser } from '../db/users';
-import { getMarketOverviewReply } from '../lib/markets';
+import { getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
@@ -102,8 +105,19 @@ async function resolveReply(
     return buildAccountReply(Boolean(account));
   }
 
+  if (normalized === '/link') {
+    return createLinkAccountReply(env, telegramUserId, botId);
+  }
+
   if (normalized === '/market' || normalized === '/markets') {
     return getMarketOverviewReply(env);
+  }
+
+  if (normalized.startsWith('/find ') || normalized.startsWith('/search ')) {
+    const query = normalized.replace(/^\/(find|search)\s+/, '').trim();
+    if (query.length > 0) {
+      return searchMarketsReply(env, query);
+    }
   }
 
   return buildDefaultReply();
@@ -124,7 +138,18 @@ async function resolveCallbackReply(
     }
     case 'getting_started':
       return buildGettingStartedReply();
+    case 'start_link_account':
+      return createLinkAccountReply(env, telegramUserId, botId);
+    case 'trade_entry': {
+      const account = await getTradingAccountStatus(env, telegramUserId, botId);
+      return buildTradeEntryReply(Boolean(account));
+    }
     default:
       return buildDefaultReply();
   }
+}
+
+async function createLinkAccountReply(env: Env, telegramUserId: string, botId: string) {
+  const session = await createAccountLinkSession(env, telegramUserId, botId);
+  return buildLinkAccountReply(session.token, session.expiresAt);
 }

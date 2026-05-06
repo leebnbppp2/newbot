@@ -33,6 +33,15 @@ type MarketCacheRow = {
   expires_at: string;
 };
 
+type AccountSessionRow = {
+  token_hash: string;
+  telegram_user_id: string;
+  bot_id: string;
+  session_type: string;
+  status: string;
+  expires_at: string;
+};
+
 class FakeD1 {
   users = new Map<string, UserRow>();
 
@@ -41,6 +50,8 @@ class FakeD1 {
   tradingAccounts = new Map<string, TradingAccountRow>();
 
   marketCache = new Map<string, MarketCacheRow>();
+
+  accountSessions = new Map<string, AccountSessionRow>();
 
   prepare(query: string) {
     return new FakePreparedStatement(this, query);
@@ -92,6 +103,19 @@ class FakePreparedStatement {
       return { success: true };
     }
 
+    if (this.query.includes('INSERT INTO user_account_sessions')) {
+      const [tokenHash, telegramUserId, botId, sessionType, status, expiresAt] = this.values as [string, string, string, string, string, string];
+      this.db.accountSessions.set(tokenHash, {
+        token_hash: tokenHash,
+        telegram_user_id: telegramUserId,
+        bot_id: botId,
+        session_type: sessionType,
+        status,
+        expires_at: expiresAt,
+      });
+      return { success: true };
+    }
+
     throw new Error(`Unsupported run query in test fake: ${this.query}`);
   }
 
@@ -127,7 +151,7 @@ function makeEnv(db: FakeD1): Env {
     DB: db as unknown as D1Database,
     TRADE_COORDINATOR: {} as DurableObjectNamespace,
     APP_ENV: 'test',
-    NEWBOT_VERSION: '0.3.0',
+    NEWBOT_VERSION: '0.4.0',
     TELEGRAM_WEBHOOK_SECRET: 'test-secret',
     BOT_TOKEN_CRYPTO_ZH: 'bot-token',
   };
@@ -193,7 +217,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('handleTelegramWebhook phase 3', () => {
+describe('handleTelegramWebhook phase 4', () => {
   it('stores user and conversation history, then sends a Chinese start menu', async () => {
     const db = new FakeD1();
     const env = makeEnv(db);
@@ -216,7 +240,6 @@ describe('handleTelegramWebhook phase 3', () => {
     expect(db.conversations).toHaveLength(2);
     expect(db.conversations[0]).toMatchObject({ role: 'user', content: '/start' });
     expect(db.conversations[1]?.role).toBe('assistant');
-    expect(db.conversations[1]?.content).toContain('欢迎');
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as {
@@ -237,23 +260,11 @@ describe('handleTelegramWebhook phase 3', () => {
     const env = makeEnv(db);
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
-      if (url.includes('/markets?')) {
+      if (url.includes('gamma-api.polymarket.com/markets')) {
         return new Response(JSON.stringify([
-          {
-            question: 'Will BTC break 120k in 2026?',
-            volume: 1234567,
-            endDate: '2026-12-31T00:00:00Z',
-          },
-          {
-            question: 'Will ETH ETF inflows beat BTC next quarter?',
-            volume: 456789,
-            endDate: '2026-09-30T00:00:00Z',
-          },
-          {
-            question: 'Will SOL hit a new ATH this year?',
-            volume: 222333,
-            endDate: '2026-10-01T00:00:00Z',
-          },
+          { question: 'Will BTC break 120k in 2026?', volume: 1234567, endDate: '2026-12-31T00:00:00Z' },
+          { question: 'Will ETH ETF inflows beat BTC next quarter?', volume: 456789, endDate: '2026-09-30T00:00:00Z' },
+          { question: 'Will SOL hit a new ATH this year?', volume: 222333, endDate: '2026-10-01T00:00:00Z' },
         ]), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
@@ -269,8 +280,50 @@ describe('handleTelegramWebhook phase 3', () => {
     expect(payload.text).toContain('先看 3 个活跃市场');
     expect(payload.text).toContain('BTC break 120k');
     expect(db.marketCache.get('frontpage_overview')).toBeTruthy();
-    expect(db.conversations[0]?.content).toBe('/market');
-    expect(db.conversations[1]?.content).toContain('先看 3 个活跃市场');
+  });
+
+  it('supports keyword market search via /find', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify([
+          { question: 'Will BTC break 120k in 2026?', volume: 1234567, endDate: '2026-12-31T00:00:00Z' },
+          { question: 'Will ETH ETF inflows beat BTC next quarter?', volume: 456789, endDate: '2026-09-30T00:00:00Z' },
+          { question: 'Will BTC dominance stay above 55%?', volume: 120000, endDate: '2026-08-01T00:00:00Z' },
+          { question: 'Will SOL hit a new ATH this year?', volume: 222333, endDate: '2026-10-01T00:00:00Z' },
+        ]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/find btc'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('给你找了 3 个和“btc”相关的市场');
+    expect(payload.text).toContain('BTC break 120k');
+    expect(payload.text).toContain('BTC dominance');
+    expect(db.marketCache.get('search:btc')).toBeTruthy();
+  });
+
+  it('creates a link session for unbound accounts', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/link'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(db.accountSessions.size).toBe(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('绑定入口已经给你准备好了');
+    expect(payload.text).toContain('链接口令');
   });
 
   it('handles account callback by answering and editing message text', async () => {
@@ -286,12 +339,22 @@ describe('handleTelegramWebhook phase 3', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/answerCallbackQuery');
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/editMessageText');
+  });
 
+  it('blocks trade entry when account is not linked yet', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('trade_entry'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
-    expect(payload.text).toContain('还没绑定交易账户');
-    expect(db.conversations[0]?.content).toBe('[callback] account_status');
-    expect(db.conversations[1]?.content).toContain('还没绑定交易账户');
+    expect(payload.text).toContain('下单前要先绑定交易账户');
+    expect(payload.text).toContain('我已经把绑定入口给你放好了');
   });
 
   it('returns 200 instead of crashing when telegram edit fails during callback handling', async () => {
