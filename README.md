@@ -43,13 +43,18 @@ node scripts/set-webhook.mjs
 
 ```bash
 npm run typecheck
+npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 1 行为
+## 当前 Phase 2 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
 - Telegram:
-  - `/start` → welcome 文本
-  - 其他文本 → `Echo: <原文>`
+  - `/start` 或 `/menu` → 中文欢迎词 + 主菜单
+  - `/account` 或 `/status` → 返回账户是否已绑定
+  - 其他文本 → 先记录对话，再返回 Phase 2 引导文案
+- 数据落库：
+  - `users` 会 upsert Telegram 用户资料
+  - `conversations` 会记录 user / assistant 双向对话

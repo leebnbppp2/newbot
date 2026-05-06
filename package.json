@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "deploy": "node scripts/deploy.mjs deploy",
     "build": "node scripts/deploy.mjs build",
     "d1:apply": "node scripts/apply-sql.mjs newbot-db migrations/0001_init.sql"
@@ -14,7 +16,9 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260320.0",
+    "@types/node": "^25.6.0",
     "typescript": "^5.8.3",
+    "vitest": "^4.1.5",
     "wrangler": "^4.80.0"
   }
 }

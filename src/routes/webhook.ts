@@ -1,9 +1,12 @@
 /**
- * Telegram webhook route with persona lookup and Phase 1 echo behavior.
+ * Telegram webhook route with persona lookup and Phase 2 onboarding/account behavior.
  */
 
-import { PERSONAS } from '../agent/personas';
+import { buildAccountReply, buildDefaultReply, buildStartReply } from '../agent/replies';
+import { appendConversationTurn } from '../db/conversations';
+import { getTradingAccountStatus, upsertTelegramUser } from '../db/users';
 import { sendTelegramMessage } from '../lib/telegram';
+import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramUpdate } from '../types';
 
 const TELEGRAM_SECRET_HEADER = 'x-telegram-bot-api-secret-token';
@@ -25,13 +28,20 @@ export async function handleTelegramWebhook(request: Request, env: Env, personaI
   }
 
   const payload = (await request.json()) as TelegramUpdate;
-  const text = payload.message?.text;
+  const text = payload.message?.text?.trim();
   const chatId = payload.message?.chat.id;
+  const telegramUserId = payload.message?.from?.id;
 
-  if (typeof text === 'string' && typeof chatId !== 'undefined') {
-    const reply = text === '/start'
-      ? 'Welcome to NewBot Phase 1. Webhook is live.'
-      : `Echo: ${text}`;
+  if (payload.message && typeof telegramUserId !== 'undefined') {
+    await upsertTelegramUser(env, persona.id, payload.message);
+  }
+
+  if (typeof text === 'string' && typeof chatId !== 'undefined' && typeof telegramUserId !== 'undefined') {
+    const conversationUserId = `${persona.id}:${telegramUserId}`;
+    await appendConversationTurn(env, conversationUserId, 'user', text);
+
+    const reply = await resolveReply(env, persona.id, String(telegramUserId), text);
+    await appendConversationTurn(env, conversationUserId, 'assistant', reply.text);
     await sendTelegramMessage(env, persona.telegramBotTokenSecretName, chatId, reply);
   }
 
@@ -39,4 +49,24 @@ export async function handleTelegramWebhook(request: Request, env: Env, personaI
     status: 200,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+async function resolveReply(
+  env: Env,
+  botId: string,
+  telegramUserId: string,
+  text: string,
+) {
+  const normalized = text.toLowerCase();
+
+  if (normalized === '/start' || normalized === '/menu') {
+    return buildStartReply();
+  }
+
+  if (normalized === '/account' || normalized === '/status') {
+    const account = await getTradingAccountStatus(env, telegramUserId, botId);
+    return buildAccountReply(Boolean(account));
+  }
+
+  return buildDefaultReply();
 }

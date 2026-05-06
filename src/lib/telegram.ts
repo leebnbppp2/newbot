@@ -2,6 +2,7 @@
  * Minimal Telegram API helpers for sending/editing messages during Phase 1.
  */
 
+import type { BotReply } from '../agent/replies';
 import type { Env } from '../types';
 
 const TELEGRAM_HOST = 'https://api.telegram.org';
@@ -27,11 +28,16 @@ export async function sendTelegramMessage(
   env: Env,
   secretName: 'BOT_TOKEN_CRYPTO_ZH',
   chatId: number | string,
-  text: string,
+  reply: string | BotReply,
 ): Promise<void> {
+  const normalizedReply = typeof reply === 'string'
+    ? { text: reply }
+    : reply;
+
   const response = await telegramApi(env, secretName, 'sendMessage', {
     chat_id: chatId,
-    text,
+    text: normalizedReply.text,
+    reply_markup: normalizedReply.replyMarkup,
   });
   if (!response.ok) {
     const detail = await response.text();
