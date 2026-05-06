@@ -4,6 +4,7 @@
 
 import {
   buildAccountReply,
+  buildBuyConfirmReply,
   buildDefaultReply,
   buildGettingStartedReply,
   buildLinkAccountReply,
@@ -13,7 +14,7 @@ import {
 import { createAccountLinkSession } from '../db/account_sessions';
 import { appendConversationTurn } from '../db/conversations';
 import { getTradingAccountStatus, upsertTelegramUser } from '../db/users';
-import { getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
+import { getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
@@ -117,6 +118,24 @@ async function resolveReply(
     const query = normalized.replace(/^\/(find|search)\s+/, '').trim();
     if (query.length > 0) {
       return searchMarketsReply(env, query);
+    }
+  }
+
+  if (normalized.startsWith('/detail ')) {
+    const query = normalized.replace(/^\/detail\s+/, '').trim();
+    if (query.length > 0) {
+      return getMarketDetailReply(env, query);
+    }
+  }
+
+  if (normalized.startsWith('/buy ')) {
+    const amountText = normalized.replace(/^\/buy\s+/, '').trim();
+    if (amountText.length > 0) {
+      const account = await getTradingAccountStatus(env, telegramUserId, botId);
+      if (!account) {
+        return buildTradeEntryReply(false);
+      }
+      return buildBuyConfirmReply(amountText);
     }
   }
 

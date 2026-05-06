@@ -1,9 +1,10 @@
 /**
- * Worker entrypoint. Phase 1 wires health, version, and Telegram webhook echo routes.
+ * Worker entrypoint. Phase 5 wires health, version, Telegram webhook, and link portal routes.
  */
 
 import { TradeCoordinator } from './durable_objects/trade_coordinator';
 import { handleHealthz, handleVersion } from './routes/public';
+import { handleLinkPortal } from './routes/portal';
 import { handleTelegramWebhook } from './routes/webhook';
 import type { Env } from './types';
 
@@ -19,6 +20,11 @@ export default {
 
     if (request.method === 'GET' && url.pathname === '/version') {
       return handleVersion(env);
+    }
+
+    const portalMatch = url.pathname.match(/^\/portal\/link\/([A-Z0-9]+)$/i);
+    if (request.method === 'GET' && portalMatch?.[1]) {
+      return handleLinkPortal(env, portalMatch[1]);
     }
 
     const webhookMatch = url.pathname.match(/^\/telegram\/webhook\/([a-z0-9_\-]+)$/i);

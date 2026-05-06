@@ -1,8 +1,9 @@
 /**
- * Minimal Polymarket market overview + local keyword search for Phase 4.
+ * Minimal Polymarket market overview + local search/detail for Phase 5.
  */
 
 import {
+  buildMarketDetailReply,
   buildMarketOverviewReply,
   buildMarketSearchReply,
   type BotReply,
@@ -44,10 +45,20 @@ export async function searchMarketsReply(env: Env, rawQuery: string): Promise<Bo
     return buildMarketSearchReply(query, cached);
   }
 
-  const allMarkets = await fetchMarkets();
-  const filtered = allMarkets.filter((market) => market.question.toLowerCase().includes(query));
+  const filtered = await searchMarkets(env, query);
   await writeCache(env, cacheKey, filtered);
   return buildMarketSearchReply(query, filtered);
+}
+
+export async function getMarketDetailReply(env: Env, rawQuery: string): Promise<BotReply> {
+  const query = rawQuery.trim().toLowerCase();
+  const matched = await searchMarkets(env, query);
+  return buildMarketDetailReply(query, matched[0] ?? null);
+}
+
+async function searchMarkets(env: Env, query: string): Promise<MarketItem[]> {
+  const allMarkets = await fetchMarkets();
+  return allMarkets.filter((market) => market.question.toLowerCase().includes(query));
 }
 
 async function readCache(env: Env, cacheKey: string): Promise<MarketItem[] | null> {
@@ -88,7 +99,7 @@ async function fetchMarkets(): Promise<MarketItem[]> {
   const response = await fetch(BASE_MARKETS_URL, {
     headers: {
       accept: 'application/json',
-      'user-agent': 'NewBot/0.4',
+      'user-agent': 'NewBot/0.5',
     },
   });
 

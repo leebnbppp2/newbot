@@ -1,5 +1,5 @@
 /**
- * Simple Phase 4 reply builders.
+ * Simple Phase 5 reply builders.
  */
 
 export interface TelegramMenuMarkup {
@@ -78,6 +78,22 @@ export function buildTradeEntryReply(hasLinkedAccount: boolean): BotReply {
   };
 }
 
+export function buildBuyConfirmReply(amountText: string): BotReply {
+  return {
+    text: [
+      '下单确认占位已经准备好了。',
+      `本次计划金额：${amountText} USDC`,
+      '下一步我会把它接成：选市场 → 选方向 → 最终确认 → 提交订单。',
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '看市场', callback_data: 'market_overview' }],
+        [{ text: '我的账户', callback_data: 'account_status' }],
+      ],
+    },
+  };
+}
+
 export function buildMarketOverviewReply(markets: MarketItem[]): BotReply {
   if (markets.length === 0) {
     return {
@@ -127,6 +143,31 @@ export function buildMarketSearchReply(query: string, markets: MarketItem[]): Bo
   };
 }
 
+export function buildMarketDetailReply(query: string, market: MarketItem | null): BotReply {
+  if (!market) {
+    return {
+      text: `我还没找到和“${query}”最匹配的市场。你可以换个更具体的关键词试试。`,
+      replyMarkup: buildMainMenuMarkup(),
+    };
+  }
+
+  return {
+    text: [
+      '你先看这个市场：',
+      market.question,
+      `成交额 ${formatUsd(market.volume)}`,
+      market.endDate ? `截止 ${market.endDate.slice(0, 10)}` : '截止时间待确认',
+      '如果你想继续，直接发 /buy 50，我就把它带到下单前确认流。',
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '准备下单', callback_data: 'trade_entry' }],
+        ...buildMainMenuMarkup().inline_keyboard,
+      ],
+    },
+  };
+}
+
 export function buildGettingStartedReply(): BotReply {
   return {
     text: [
@@ -142,7 +183,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 4 已经支持 /start、/account、/market、/find、/link，也可以直接点菜单继续走。',
+    text: '我先记下了。现在 Phase 5 已经支持 /start、/account、/market、/find、/detail、/link、/buy，也可以直接点菜单继续走。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }

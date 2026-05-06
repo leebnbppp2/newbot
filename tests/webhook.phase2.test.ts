@@ -357,6 +357,51 @@ describe('handleTelegramWebhook phase 4', () => {
     expect(payload.text).toContain('我已经把绑定入口给你放好了');
   });
 
+  it('returns a market detail reply for /detail btc', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify([
+          { question: 'Will BTC break 120k in 2026?', volume: 1234567, endDate: '2026-12-31T00:00:00Z' },
+          { question: 'Will ETH ETF inflows beat BTC next quarter?', volume: 456789, endDate: '2026-09-30T00:00:00Z' },
+        ]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/detail btc'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('你先看这个市场');
+    expect(payload.text).toContain('BTC break 120k');
+    expect(payload.text).toContain('/buy 50');
+  });
+
+  it('returns a buy confirmation placeholder for linked users', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+    });
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/buy 50'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('下单确认占位');
+    expect(payload.text).toContain('50 USDC');
+  });
+
   it('returns 200 instead of crashing when telegram edit fails during callback handling', async () => {
     const db = new FakeD1();
     const env = makeEnv(db);

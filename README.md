@@ -47,17 +47,20 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 4 行为
+## 当前 Phase 5 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
+- `GET /portal/link/:token` → 返回账户连接入口骨架页面；合法会话会展示口令和 managed signer 引导
 - Telegram 文本指令：
   - `/start` 或 `/menu` → 中文欢迎词 + 主菜单
   - `/account` 或 `/status` → 返回账户是否已绑定
   - `/link` → 生成账户绑定入口口令并写入 `user_account_sessions`
   - `/market` 或 `/markets` → 拉取并展示 3 个活跃市场
   - `/find <关键词>` / `/search <关键词>` → 在活跃市场里做本地关键词筛选
-  - 其他文本 → 先记录对话，再返回 Phase 4 引导文案
+  - `/detail <关键词>` → 返回最匹配市场的详情占位
+  - `/buy <金额>` → 进入下单确认占位；未绑定时会先引导绑定
+  - 其他文本 → 先记录对话，再返回 Phase 5 引导文案
 - Telegram 菜单按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
