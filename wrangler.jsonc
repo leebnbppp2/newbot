@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "newbot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "newbot-db",
+      "database_id": "d5db257b-59db-4845-8fe1-5e1313abf003"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRADE_COORDINATOR",
+        "class_name": "TradeCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["TradeCoordinator"],
+      "tag": "v1"
+    }
+  ],
+  "vars": {
+    "APP_ENV": "production",
+    "NEWBOT_VERSION": "0.1.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "newbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "node scripts/deploy.mjs deploy",
+    "build": "node scripts/deploy.mjs build",
+    "d1:apply": "node scripts/apply-sql.mjs newbot-db migrations/0001_init.sql"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.58.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260320.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.80.0"
+  }
+}
