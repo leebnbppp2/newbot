@@ -18,6 +18,7 @@ import {
   buildTradeEntryReply,
 } from '../agent/replies';
 import { createAccountLinkSession } from '../db/account_sessions';
+import { createBuilderAttribution } from '../db/builder_attributions';
 import { appendConversationTurn } from '../db/conversations';
 import {
   createTradeEvent,
@@ -383,7 +384,7 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
     account,
   });
 
-  await createTradeEvent(env, {
+  const tradeEventId = await createTradeEvent(env, {
     telegramUserId,
     botId,
     eventType: 'buy',
@@ -399,8 +400,20 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
       price: selectedOutcome?.price ?? null,
       mode: execution.mode,
       detail: execution.detail,
+      builder_attribution: execution.builderAttribution,
     }),
   });
+
+  if (execution.mode === 'live' && execution.builderAttribution) {
+    await createBuilderAttribution(env, {
+      telegramUserId,
+      botId,
+      tradeEventId,
+      builderApiKeyHint: execution.builderAttribution.builderApiKeyHint,
+      orderId: execution.orderId,
+      amountUsdc,
+    });
+  }
 
   return buildSubmittedBuyReply(
     market,

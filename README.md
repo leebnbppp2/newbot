@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 15：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 16：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -14,6 +14,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - callback 翻页 + open orders 按钮撤单
 - callback 撤单后原地刷新 open orders 当前页
 - positions 已实现/未实现盈亏拆分 + page token 解析
+- Builder Program attribution 落库与生效校验
 
 ## 5 步部署
 
@@ -38,11 +39,12 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 ```
 
-如果你要启用 Phase 15 的 live order/portfolio request，还可以额外提供：
+如果你要启用 Phase 16 的 live order/portfolio request，还可以额外提供：
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_ORDER_API_KEY`
 - `POLYMARKET_ORDER_SIGNING_SECRET`
 - `POLYMARKET_BUILDER_TAG`
+- `POLYMARKET_BUILDER_API_KEY`
 
 5. 应用 schema、部署、设置 webhook
 ```bash
@@ -62,7 +64,7 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 15 行为
+## 当前 Phase 16 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
@@ -81,13 +83,14 @@ curl https://<your-worker>.workers.dev/healthz
     - `wallet_signature` 会走 `clob_wallet`
     - 有 live API 配置就发真实请求
     - 有 signing secret 会附带 signed payload 和 `x-order-signature`
+    - 有 builder tag + builder api key 时，会把 Builder Program attribution 一起塞进 payload，并落库到 `builder_attributions`
     - 没有配置就自动回退到模拟单
   - `/orders` → 返回最近订单记录；如果是 live 订单且配置了 order API，会额外刷新订单状态，并把新状态回写到本地 `trade_events`
   - `/openorders` / `/openorders 2` → 返回远端未成交订单列表，支持基础分页，并在消息里带撤单按钮
   - `/positions` / `/positions 2` / `/positions p2` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；会显示总敞口、已实现/未实现盈亏、分页游标和下一页 token
   - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页
   - `/cancel <orderId>` → 对 live 订单发撤单请求，并把取消后的状态回写到本地 `trade_events`
-  - 其他文本 → 先记录对话，再返回 Phase 15 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 16 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
@@ -102,4 +105,5 @@ curl https://<your-worker>.workers.dev/healthz
   - `market_cache` 现在也会缓存 open orders / positions / fills 等 portfolio 数据
   - `user_account_sessions` 会生成并完成账户接入会话
   - `user_trading_accounts` 会记录已绑定账户基础信息
-  - `trade_events` 会记录 live / simulated 两类订单事件，并持续同步 live 状态；如果能匹配到订单号，也会在 callback 撤单后同步取消状态
+  - `trade_events` 会记录 live / simulated 两类订单事件，并持续同步 live 状态；payload 里会附带 builder attribution 校验结果
+  - `builder_attributions` 现在会记录 builder api key hint、trade_event_id、order_id 和金额，供后续收益归因校验

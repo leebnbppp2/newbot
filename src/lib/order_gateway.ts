@@ -20,6 +20,7 @@ export interface ExecuteBuyOrderResult {
   status: string;
   orderId: string;
   detail: Record<string, unknown>;
+  builderAttribution: BuilderAttributionDetail | null;
 }
 
 export interface CancelOrderResult {
@@ -33,11 +34,19 @@ interface LiveOrderConfig {
   apiKey: string;
   signingSecret: string | null;
   builderTag: string | null;
+  builderApiKey: string | null;
 }
 
 interface CacheRow {
   data_json: string;
   expires_at: string;
+}
+
+export interface BuilderAttributionDetail {
+  active: boolean;
+  builderTag: string | null;
+  builderApiKeyHint: string | null;
+  attributionMode: 'builder_program' | 'none';
 }
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -53,10 +62,11 @@ export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Pr
         reason: 'missing_live_order_config',
         message: '还没接入真实下单 API，先按模拟单记录。',
       },
+      builderAttribution: null,
     };
   }
 
-  const requestBody = buildLiveOrderPayload(input, liveConfig.builderTag);
+  const requestBody = buildLiveOrderPayload(input, liveConfig.builderTag, liveConfig.builderApiKey);
   const headers = await buildSignedHeaders(liveConfig, requestBody, input.account.auth_mode);
 
   const response = await fetch(`${liveConfig.baseUrl}/orders`, {
@@ -79,7 +89,9 @@ export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Pr
       request: requestBody,
       signed: Boolean(liveConfig.signingSecret),
       auth_mode: input.account.auth_mode,
+      builder_attribution: buildBuilderAttributionDetail(liveConfig),
     },
+    builderAttribution: buildBuilderAttributionDetail(liveConfig),
   };
 }
 
@@ -210,6 +222,7 @@ function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
     apiKey,
     signingSecret: env.POLYMARKET_ORDER_SIGNING_SECRET?.trim() || null,
     builderTag: env.POLYMARKET_BUILDER_TAG?.trim() || null,
+    builderApiKey: env.POLYMARKET_BUILDER_API_KEY?.trim() || null,
   };
 }
 
@@ -242,7 +255,7 @@ async function writeCache<T>(env: Env, cacheKey: string, data: T[]): Promise<voi
     .run();
 }
 
-function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string | null): Record<string, unknown> {
+function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string | null, builderApiKey: string | null): Record<string, unknown> {
   const timestampMs = Date.now();
   const clientOrderId = `nbo-${timestampMs}-${crypto.randomUUID().slice(0, 8)}`;
   const nonce = crypto.randomUUID().replaceAll('-', '');
@@ -262,6 +275,8 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
     timestamp_ms: timestampMs,
     nonce,
     builder_tag: builderTag,
+    builder_api_key: builderApiKey,
+    builder_api_key_hint: maskBuilderApiKey(builderApiKey),
     signature_type: signatureType,
     protocol: 'polymarket_clob_v1',
   };
@@ -323,6 +338,28 @@ function safeParseJson(value: string | null): unknown {
 
 function toHex(input: ArrayBuffer): string {
   return Array.from(new Uint8Array(input)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function buildBuilderAttributionDetail(config: LiveOrderConfig): BuilderAttributionDetail | null {
+  if (!config.builderTag && !config.builderApiKey) {
+    return null;
+  }
+  return {
+    active: Boolean(config.builderTag && config.builderApiKey),
+    builderTag: config.builderTag,
+    builderApiKeyHint: maskBuilderApiKey(config.builderApiKey),
+    attributionMode: 'builder_program',
+  };
+}
+
+function maskBuilderApiKey(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  if (value.length <= 4) {
+    return `****${value}`;
+  }
+  return `****${value.slice(-4)}`;
 }
 
 async function safeJson(response: Response): Promise<unknown> {

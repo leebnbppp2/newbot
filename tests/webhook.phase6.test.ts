@@ -45,10 +45,22 @@ type ReplyMarkup = {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
 };
 
+type BuilderAttributionRow = {
+  id: number;
+  telegram_user_id: string;
+  bot_id: string;
+  trade_event_id: number | null;
+  builder_api_key_hint: string | null;
+  order_id: string | null;
+  amount_usdc: number | null;
+};
+
 class FakeD1 {
   tradingAccounts = new Map<string, TradingAccountRow>();
 
   tradeEvents: TradeEventRow[] = [];
+
+  builderAttributions: BuilderAttributionRow[] = [];
 
   conversations: ConversationRow[] = [];
 
@@ -146,6 +158,27 @@ class FakePreparedStatement {
       return { success: true };
     }
 
+    if (this.query.includes('INSERT INTO builder_attributions')) {
+      const [telegramUserId, botId, tradeEventId, builderApiKeyHint, orderId, amountUsdc] = this.values as [
+        string,
+        string,
+        number | null,
+        string | null,
+        string | null,
+        number | null,
+      ];
+      this.db.builderAttributions.push({
+        id: this.db.builderAttributions.length + 1,
+        telegram_user_id: telegramUserId,
+        bot_id: botId,
+        trade_event_id: tradeEventId,
+        builder_api_key_hint: builderApiKeyHint,
+        order_id: orderId,
+        amount_usdc: amountUsdc,
+      });
+      return { success: true, meta: { last_row_id: this.db.builderAttributions.length } };
+    }
+
     if (this.query.includes('INSERT INTO trade_events')) {
       const [telegramUserId, botId, eventType, marketSlug, outcome, tokenId, amountUsdc, status, orderId, payloadJson] = this.values as [
         string,
@@ -173,7 +206,7 @@ class FakePreparedStatement {
         payload_json: payloadJson,
         created_at: new Date().toISOString(),
       });
-      return { success: true };
+      return { success: true, meta: { last_row_id: this.db.tradeEvents.length } };
     }
 
     if (this.query.includes('INSERT INTO users')) {
@@ -345,6 +378,7 @@ describe('handleTelegramWebhook phase 6', () => {
       POLYMARKET_ORDER_API_KEY: 'order-key',
       POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
       POLYMARKET_BUILDER_TAG: 'newbot-phase8',
+      POLYMARKET_BUILDER_API_KEY: 'builder-secret-key-1234',
     });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -373,6 +407,8 @@ describe('handleTelegramWebhook phase 6', () => {
         expect(payload.token_id).toBe('111');
         expect(payload.amount_usdc).toBe(50);
         expect(payload.builder_tag).toBe('newbot-phase8');
+        expect(payload.builder_api_key).toBe('builder-secret-key-1234');
+        expect(payload.builder_api_key_hint).toBe('****1234');
         expect(payload.signature_type).toBe('clob_delegate');
         expect(payload.client_order_id).toMatch(/^nbo-/);
         expect(typeof payload.timestamp_ms).toBe('number');
@@ -386,6 +422,15 @@ describe('handleTelegramWebhook phase 6', () => {
 
     expect(response.status).toBe(200);
     expect(db.tradeEvents).toHaveLength(1);
+    expect(db.builderAttributions).toHaveLength(1);
+    expect(db.builderAttributions[0]).toMatchObject({
+      bot_id: 'crypto_zh',
+      telegram_user_id: '1001',
+      order_id: 'live-ord-123',
+      amount_usdc: 50,
+      builder_api_key_hint: '****1234',
+      trade_event_id: 1,
+    });
     expect(db.tradeEvents[0]).toMatchObject({
       market_slug: 'btc-break-120k-2026',
       outcome: 'Yes',
@@ -393,6 +438,8 @@ describe('handleTelegramWebhook phase 6', () => {
       status: 'live_submitted',
       order_id: 'live-ord-123',
     });
+    expect(db.tradeEvents[0]?.payload_json).toContain('builder_attribution');
+    expect(db.tradeEvents[0]?.payload_json).toContain('newbot-phase8');
     const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('真实下单请求已经发出');

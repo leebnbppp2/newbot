@@ -32,8 +32,8 @@ export interface CreateTradeEventInput {
   payloadJson: string | null;
 }
 
-export async function createTradeEvent(env: Env, input: CreateTradeEventInput): Promise<void> {
-  await env.DB.prepare(
+export async function createTradeEvent(env: Env, input: CreateTradeEventInput): Promise<number | null> {
+  const result = await env.DB.prepare(
     `INSERT INTO trade_events (
       telegram_user_id,
       bot_id,
@@ -61,6 +61,9 @@ export async function createTradeEvent(env: Env, input: CreateTradeEventInput): 
       input.payloadJson,
     )
     .run();
+
+  const meta = (result as { meta?: { last_row_id?: number } }).meta;
+  return typeof meta?.last_row_id === 'number' ? meta.last_row_id : null;
 }
 
 export async function listRecentTradeEvents(
