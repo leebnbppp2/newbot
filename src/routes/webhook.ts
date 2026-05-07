@@ -1,5 +1,5 @@
 /**
- * Telegram webhook route with persona lookup and Phase 11 onboarding/market behavior.
+ * Telegram webhook route with persona lookup and Phase 12 onboarding/market behavior.
  */
 
 import {
@@ -129,19 +129,20 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     return getMarketOverviewReply(env);
   }
 
-  if (normalized === '/orders') {
+  if (normalized.startsWith('/orders')) {
     const events = await listRecentTradeEvents(env, telegramUserId, botId);
     const enrichedEvents = await enrichTradeEventsWithLiveStatus(env, events);
     await persistEnrichedTradeEvents(env, telegramUserId, botId, events, enrichedEvents);
     return buildOrdersReply(enrichedEvents);
   }
 
-  if (normalized === '/openorders') {
+  if (normalized.startsWith('/openorders')) {
+    const page = parseCommandPage(text);
     const orders = await fetchLiveOpenOrders(env, telegramUserId, botId);
-    return buildOpenOrdersReply(orders);
+    return buildOpenOrdersReply(orders, page);
   }
 
-  if (normalized === '/positions') {
+  if (normalized.startsWith('/positions')) {
     const remotePositions = await fetchRemotePositions(env, telegramUserId, botId);
     if (remotePositions.length > 0) {
       return buildRemotePositionsReply(remotePositions);
@@ -150,9 +151,10 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     return buildPositionsReply(events);
   }
 
-  if (normalized === '/fills') {
+  if (normalized.startsWith('/fills')) {
+    const page = parseCommandPage(text);
     const fills = await fetchRemoteFills(env, telegramUserId, botId);
-    return buildFillsReply(fills);
+    return buildFillsReply(fills, page);
   }
 
   if (normalized.startsWith('/cancel ')) {
@@ -345,6 +347,16 @@ function normalizeOutcome(value: string): string | null {
   if (normalized === 'yes') return 'Yes';
   if (normalized === 'no') return 'No';
   return null;
+}
+
+function parseCommandPage(text: string): number {
+  const parts = text.trim().split(/\s+/);
+  const last = parts.at(-1);
+  const page = Number(last);
+  if (!Number.isFinite(page) || page < 1) {
+    return 1;
+  }
+  return Math.floor(page);
 }
 
 function safeParseJson(value: string | null): unknown {

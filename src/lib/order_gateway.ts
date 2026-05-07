@@ -1,5 +1,5 @@
 /**
- * Phase 11 order gateway: auth-mode aware signing prep + live lifecycle + portfolio reads.
+ * Phase 12 order gateway: lifecycle + portfolio reads + local cache.
  */
 
 import type { RemoteFill, RemoteOpenOrder, RemotePosition, MarketItem } from '../agent/replies';
@@ -34,6 +34,13 @@ interface LiveOrderConfig {
   signingSecret: string | null;
   builderTag: string | null;
 }
+
+interface CacheRow {
+  data_json: string;
+  expires_at: string;
+}
+
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Promise<ExecuteBuyOrderResult> {
   const liveConfig = getLiveOrderConfig(env);
@@ -137,50 +144,59 @@ export async function cancelLiveOrder(env: Env, orderId: string, authMode: strin
 
 export async function fetchLiveOpenOrders(env: Env, telegramUserId: string, botId: string): Promise<RemoteOpenOrder[]> {
   const liveConfig = getLiveOrderConfig(env);
+  const cacheKey = `portfolio:openorders:${botId}:${telegramUserId}`;
   if (!liveConfig) {
-    return [];
+    return readCache<RemoteOpenOrder>(env, cacheKey);
   }
   const response = await fetch(`${liveConfig.baseUrl}/orders/open?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
     method: 'GET',
     headers: { authorization: `Bearer ${liveConfig.apiKey}` },
   });
   if (!response.ok) {
-    return [];
+    return readCache<RemoteOpenOrder>(env, cacheKey);
   }
   const payload = (await safeJson(response)) as { orders?: RemoteOpenOrder[] };
-  return payload.orders ?? [];
+  const orders = payload.orders ?? [];
+  await writeCache(env, cacheKey, orders);
+  return orders;
 }
 
 export async function fetchRemotePositions(env: Env, telegramUserId: string, botId: string): Promise<RemotePosition[]> {
   const liveConfig = getLiveOrderConfig(env);
+  const cacheKey = `portfolio:positions:${botId}:${telegramUserId}`;
   if (!liveConfig) {
-    return [];
+    return readCache<RemotePosition>(env, cacheKey);
   }
   const response = await fetch(`${liveConfig.baseUrl}/portfolio/positions?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
     method: 'GET',
     headers: { authorization: `Bearer ${liveConfig.apiKey}` },
   });
   if (!response.ok) {
-    return [];
+    return readCache<RemotePosition>(env, cacheKey);
   }
   const payload = (await safeJson(response)) as { positions?: RemotePosition[] };
-  return payload.positions ?? [];
+  const positions = payload.positions ?? [];
+  await writeCache(env, cacheKey, positions);
+  return positions;
 }
 
 export async function fetchRemoteFills(env: Env, telegramUserId: string, botId: string): Promise<RemoteFill[]> {
   const liveConfig = getLiveOrderConfig(env);
+  const cacheKey = `portfolio:fills:${botId}:${telegramUserId}`;
   if (!liveConfig) {
-    return [];
+    return readCache<RemoteFill>(env, cacheKey);
   }
   const response = await fetch(`${liveConfig.baseUrl}/portfolio/fills?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
     method: 'GET',
     headers: { authorization: `Bearer ${liveConfig.apiKey}` },
   });
   if (!response.ok) {
-    return [];
+    return readCache<RemoteFill>(env, cacheKey);
   }
   const payload = (await safeJson(response)) as { fills?: RemoteFill[] };
-  return payload.fills ?? [];
+  const fills = payload.fills ?? [];
+  await writeCache(env, cacheKey, fills);
+  return fills;
 }
 
 function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
@@ -195,6 +211,35 @@ function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
     signingSecret: env.POLYMARKET_ORDER_SIGNING_SECRET?.trim() || null,
     builderTag: env.POLYMARKET_BUILDER_TAG?.trim() || null,
   };
+}
+
+async function readCache<T>(env: Env, cacheKey: string): Promise<T[]> {
+  const row = await env.DB.prepare('SELECT data_json, expires_at FROM market_cache WHERE slug = ? LIMIT 1')
+    .bind(cacheKey)
+    .first<CacheRow>();
+  if (!row || Date.parse(row.expires_at) <= Date.now()) {
+    return [];
+  }
+  try {
+    return JSON.parse(row.data_json) as T[];
+  } catch {
+    return [];
+  }
+}
+
+async function writeCache<T>(env: Env, cacheKey: string, data: T[]): Promise<void> {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + CACHE_TTL_MS);
+  await env.DB.prepare(
+    `INSERT INTO market_cache (slug, data_json, fetched_at, expires_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(slug) DO UPDATE SET
+       data_json = excluded.data_json,
+       fetched_at = excluded.fetched_at,
+       expires_at = excluded.expires_at`,
+  )
+    .bind(cacheKey, JSON.stringify(data), now.toISOString(), expiresAt.toISOString())
+    .run();
 }
 
 function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string | null): Record<string, unknown> {

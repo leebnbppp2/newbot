@@ -40,6 +40,7 @@ export interface RemotePosition {
   outcome: string;
   sizeUsdc: number;
   avgPrice?: number;
+  currentPrice?: number;
 }
 
 export interface RemoteFill {
@@ -184,7 +185,7 @@ export function buildOrdersReply(events: TradeEventRow[]): BotReply {
   };
 }
 
-export function buildOpenOrdersReply(orders: RemoteOpenOrder[]): BotReply {
+export function buildOpenOrdersReply(orders: RemoteOpenOrder[], page = 1, pageSize = 2): BotReply {
   if (orders.length === 0) {
     return {
       text: '你这边暂时没有未成交订单。',
@@ -192,11 +193,12 @@ export function buildOpenOrdersReply(orders: RemoteOpenOrder[]): BotReply {
     };
   }
 
-  const lines = orders.slice(0, 5).map((order, index) => (
+  const { items, totalPages, currentPage } = paginateItems(orders, page, pageSize);
+  const lines = items.map((order, index) => (
     `${index + 1}. ${order.marketSlug}\n   ${order.outcome} · ${order.amountUsdc} USDC · ${order.status} · ${order.orderId}`
   ));
   return {
-    text: [`当前 ${Math.min(orders.length, 5)} 条未成交订单：`, ...lines].join('\n'),
+    text: [`当前 ${orders.length} 条未成交订单：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines].join('\n'),
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -227,9 +229,12 @@ export function buildRemotePositionsReply(positions: RemotePosition[]): BotReply
     };
   }
 
-  const lines = positions.slice(0, 5).map((position, index) => (
-    `${index + 1}. ${position.marketSlug}\n   ${position.outcome} · ${position.sizeUsdc} USDC${typeof position.avgPrice === 'number' ? ` · 均价 ${position.avgPrice}` : ''}`
-  ));
+  const lines = positions.slice(0, 5).map((position, index) => {
+    const pnlText = typeof position.avgPrice === 'number' && typeof position.currentPrice === 'number'
+      ? ` · 浮动 ${formatSignedUsd((position.currentPrice - position.avgPrice) * position.sizeUsdc)}`
+      : '';
+    return `${index + 1}. ${position.marketSlug}\n   ${position.outcome} · ${position.sizeUsdc} USDC${typeof position.avgPrice === 'number' ? ` · 均价 ${position.avgPrice}` : ''}${pnlText}`;
+  });
 
   return {
     text: [`当前 ${Math.min(positions.length, 5)} 条持仓：`, ...lines].join('\n'),
@@ -237,7 +242,7 @@ export function buildRemotePositionsReply(positions: RemotePosition[]): BotReply
   };
 }
 
-export function buildFillsReply(fills: RemoteFill[]): BotReply {
+export function buildFillsReply(fills: RemoteFill[], page = 1, pageSize = 2): BotReply {
   if (fills.length === 0) {
     return {
       text: '最近还没有成交记录。',
@@ -245,12 +250,13 @@ export function buildFillsReply(fills: RemoteFill[]): BotReply {
     };
   }
 
-  const lines = fills.slice(0, 5).map((fill, index) => (
+  const { items, totalPages, currentPage } = paginateItems(fills, page, pageSize);
+  const lines = items.map((fill, index) => (
     `${index + 1}. ${fill.marketSlug}\n   ${fill.side} · ${fill.outcome} · ${fill.amountUsdc} USDC${typeof fill.price === 'number' ? ` · 成交价 ${fill.price}` : ''}`
   ));
 
   return {
-    text: [`最近 ${Math.min(fills.length, 5)} 条成交记录：`, ...lines].join('\n'),
+    text: [`最近 ${fills.length} 条成交记录：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines].join('\n'),
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -387,4 +393,20 @@ function shortenAddress(value: string): string {
 
 function formatAuthMode(value: string): string {
   return value.replaceAll('_', ' ');
+}
+
+function paginateItems<T>(items: T[], page: number, pageSize: number): { items: T[]; currentPage: number; totalPages: number } {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const start = (currentPage - 1) * pageSize;
+  return {
+    items: items.slice(start, start + pageSize),
+    currentPage,
+    totalPages,
+  };
+}
+
+function formatSignedUsd(value: number): string {
+  const sign = value >= 0 ? '+' : '-';
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
 }

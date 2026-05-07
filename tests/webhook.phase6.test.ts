@@ -35,12 +35,20 @@ type ConversationRow = {
   content: string;
 };
 
+type CacheRow = {
+  slug: string;
+  data_json: string;
+  expires_at: string;
+};
+
 class FakeD1 {
   tradingAccounts = new Map<string, TradingAccountRow>();
 
   tradeEvents: TradeEventRow[] = [];
 
   conversations: ConversationRow[] = [];
+
+  marketCache = new Map<string, CacheRow>();
 
   prepare(query: string) {
     return new FakePreparedStatement(this, query);
@@ -80,6 +88,15 @@ class FakePreparedStatement {
       return { max_turn_id: maxTurnId } as T;
     }
 
+    if (this.query.includes('SELECT data_json, expires_at FROM market_cache')) {
+      const [slug] = this.values as [string];
+      const row = this.db.marketCache.get(slug) ?? null;
+      if (!row) {
+        return null;
+      }
+      return { data_json: row.data_json, expires_at: row.expires_at } as T;
+    }
+
     if (this.query.includes('FROM trade_events') && this.query.includes('WHERE order_id = ?')) {
       const [orderId, telegramUserId, botId] = this.values as [string, string, string];
       return (
@@ -116,6 +133,12 @@ class FakePreparedStatement {
         existing.status = status;
         existing.payload_json = payloadJson;
       }
+      return { success: true };
+    }
+
+    if (this.query.includes('INSERT INTO market_cache')) {
+      const [slug, dataJson, _fetchedAt, expiresAt] = this.values as [string, string, string, string];
+      this.db.marketCache.set(slug, { slug, data_json: dataJson, expires_at: expiresAt });
       return { success: true };
     }
 
@@ -540,7 +563,7 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(payload.text).toContain('live_matched');
   });
 
-  it('returns live open orders from the remote order API', async () => {
+  it('returns paginated live open orders from the remote order API', async () => {
     const db = new FakeD1();
     db.tradingAccounts.set('1001:crypto_zh', {
       telegram_user_id: '1001',
@@ -562,23 +585,24 @@ describe('handleTelegramWebhook phase 6', () => {
           orders: [
             { orderId: 'live-open-1', marketSlug: 'btc-break-120k-2026', outcome: 'Yes', amountUsdc: 35, status: 'open' },
             { orderId: 'live-open-2', marketSlug: 'eth-etf-inflows', outcome: 'No', amountUsdc: 20, status: 'open' },
+            { orderId: 'live-open-3', marketSlug: 'sol-ath', outcome: 'Yes', amountUsdc: 15, status: 'open' },
           ],
         }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
 
-    const response = await handleTelegramWebhook(makeMessageRequest('/openorders'), env, 'crypto_zh');
+    const response = await handleTelegramWebhook(makeMessageRequest('/openorders 2'), env, 'crypto_zh');
 
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
-    expect(payload.text).toContain('当前 2 条未成交订单');
-    expect(payload.text).toContain('live-open-1');
-    expect(payload.text).toContain('btc-break-120k-2026');
+    expect(payload.text).toContain('第 2 页');
+    expect(payload.text).toContain('live-open-3');
+    expect(payload.text).not.toContain('live-open-1');
   });
 
-  it('returns live positions summary from the remote portfolio API', async () => {
+  it('returns cached live positions summary with pnl when remote portfolio API is unavailable', async () => {
     const db = new FakeD1();
     db.tradingAccounts.set('1001:crypto_zh', {
       telegram_user_id: '1001',
@@ -589,22 +613,19 @@ describe('handleTelegramWebhook phase 6', () => {
       signer_address: '0x1234567890abcdef1234567890abcdef12345678',
       funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
     });
+    db.marketCache.set('portfolio:positions:crypto_zh:1001', {
+      slug: 'portfolio:positions:crypto_zh:1001',
+      data_json: JSON.stringify([
+        { marketSlug: 'btc-break-120k-2026', outcome: 'Yes', sizeUsdc: 80, avgPrice: 0.61, currentPrice: 0.7 },
+        { marketSlug: 'eth-etf-inflows', outcome: 'No', sizeUsdc: 24, avgPrice: 0.42, currentPrice: 0.38 },
+      ]),
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
     const env = makeEnv(db, {
       POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
       POLYMARKET_ORDER_API_KEY: 'order-key',
     });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = String(input);
-      if (url === 'https://orders.example.com/portfolio/positions?bot_id=crypto_zh&telegram_user_id=1001') {
-        return new Response(JSON.stringify({
-          positions: [
-            { marketSlug: 'btc-break-120k-2026', outcome: 'Yes', sizeUsdc: 80, avgPrice: 0.61 },
-            { marketSlug: 'eth-etf-inflows', outcome: 'No', sizeUsdc: 24, avgPrice: 0.42 },
-          ],
-        }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('oops', { status: 500 }));
 
     const response = await handleTelegramWebhook(makeMessageRequest('/positions'), env, 'crypto_zh');
 
@@ -612,11 +633,11 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('当前 2 条持仓');
+    expect(payload.text).toContain('浮动');
     expect(payload.text).toContain('btc-break-120k-2026');
-    expect(payload.text).toContain('80 USDC');
   });
 
-  it('returns recent fills from the remote portfolio API', async () => {
+  it('returns paginated recent fills from the remote portfolio API', async () => {
     const db = new FakeD1();
     db.tradingAccounts.set('1001:crypto_zh', {
       telegram_user_id: '1001',
@@ -638,20 +659,21 @@ describe('handleTelegramWebhook phase 6', () => {
           fills: [
             { marketSlug: 'btc-break-120k-2026', outcome: 'Yes', amountUsdc: 25, price: 0.6, side: 'buy' },
             { marketSlug: 'eth-etf-inflows', outcome: 'No', amountUsdc: 15, price: 0.44, side: 'sell' },
+            { marketSlug: 'sol-ath', outcome: 'Yes', amountUsdc: 12, price: 0.51, side: 'buy' },
           ],
         }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     });
 
-    const response = await handleTelegramWebhook(makeMessageRequest('/fills'), env, 'crypto_zh');
+    const response = await handleTelegramWebhook(makeMessageRequest('/fills 2'), env, 'crypto_zh');
 
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
-    expect(payload.text).toContain('最近 2 条成交记录');
-    expect(payload.text).toContain('btc-break-120k-2026');
-    expect(payload.text).toContain('buy');
+    expect(payload.text).toContain('第 2 页');
+    expect(payload.text).toContain('sol-ath');
+    expect(payload.text).not.toContain('btc-break-120k-2026');
   });
 
   it('lists recent simulated orders', async () => {

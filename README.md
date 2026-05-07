@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 11：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 12：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -10,7 +10,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - live 订单状态回查 + 本地状态回写
 - live 撤单入口
 - open orders / positions / fills 读取
-- 订单 / 仓位视图
+- portfolio 数据缓存 / 分页 / 浮盈亏展示
 
 ## 5 步部署
 
@@ -35,7 +35,7 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 ```
 
-如果你要启用 Phase 11 的 live order/portfolio request，还可以额外提供：
+如果你要启用 Phase 12 的 live order/portfolio request，还可以额外提供：
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_ORDER_API_KEY`
 - `POLYMARKET_ORDER_SIGNING_SECRET`
@@ -59,7 +59,7 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 11 行为
+## 当前 Phase 12 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
@@ -80,11 +80,11 @@ curl https://<your-worker>.workers.dev/healthz
     - 有 signing secret 会附带 signed payload 和 `x-order-signature`
     - 没有配置就自动回退到模拟单
   - `/orders` → 返回最近订单记录；如果是 live 订单且配置了 order API，会额外刷新订单状态，并把新状态回写到本地 `trade_events`
-  - `/openorders` → 返回远端未成交订单列表
-  - `/positions` → 优先返回远端 portfolio 持仓；没有远端数据时回退到本地简化持仓视图
-  - `/fills` → 返回远端最近成交记录
+  - `/openorders` / `/openorders 2` → 返回远端未成交订单列表，并支持基础分页
+  - `/positions` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；如有 `avgPrice/currentPrice` 会展示浮动盈亏
+  - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页
   - `/cancel <orderId>` → 对 live 订单发撤单请求，并把取消后的状态回写到本地 `trade_events`
-  - 其他文本 → 先记录对话，再返回 Phase 11 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 12 引导文案
 - Telegram 菜单按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
@@ -94,7 +94,7 @@ curl https://<your-worker>.workers.dev/healthz
 - 数据落库：
   - `users` 会 upsert Telegram 用户资料
   - `conversations` 会记录 user / assistant 双向对话
-  - `market_cache` 会缓存市场概览和搜索结果
+  - `market_cache` 现在也会缓存 open orders / positions / fills 等 portfolio 数据
   - `user_account_sessions` 会生成并完成账户接入会话
   - `user_trading_accounts` 会记录已绑定账户基础信息
   - `trade_events` 会记录 live / simulated 两类订单事件，并持续同步 live 状态
