@@ -1,5 +1,5 @@
 /**
- * Telegram webhook route with persona lookup and Phase 12 onboarding/market behavior.
+ * Telegram webhook route with persona lookup and Phase 13 onboarding/market behavior.
  */
 
 import {
@@ -143,9 +143,10 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
   }
 
   if (normalized.startsWith('/positions')) {
+    const page = parseCommandPage(text);
     const remotePositions = await fetchRemotePositions(env, telegramUserId, botId);
     if (remotePositions.length > 0) {
-      return buildRemotePositionsReply(remotePositions);
+      return buildRemotePositionsReply(remotePositions, page);
     }
     const events = await listRecentTradeEvents(env, telegramUserId, botId);
     return buildPositionsReply(events);
@@ -186,6 +187,33 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
 }
 
 async function resolveCallbackReply(env: Env, botId: string, telegramUserId: string, data: string) {
+  if (data.startsWith('openorders_page:')) {
+    const page = parseCallbackPage(data);
+    const orders = await fetchLiveOpenOrders(env, telegramUserId, botId);
+    return buildOpenOrdersReply(orders, page);
+  }
+
+  if (data.startsWith('positions_page:')) {
+    const page = parseCallbackPage(data);
+    const positions = await fetchRemotePositions(env, telegramUserId, botId);
+    if (positions.length > 0) {
+      return buildRemotePositionsReply(positions, page);
+    }
+    const events = await listRecentTradeEvents(env, telegramUserId, botId);
+    return buildPositionsReply(events);
+  }
+
+  if (data.startsWith('fills_page:')) {
+    const page = parseCallbackPage(data);
+    const fills = await fetchRemoteFills(env, telegramUserId, botId);
+    return buildFillsReply(fills, page);
+  }
+
+  if (data.startsWith('cancel_open_order:')) {
+    const orderId = data.replace('cancel_open_order:', '').trim();
+    return cancelOpenOrderCallbackReply(env, telegramUserId, botId, orderId);
+  }
+
   switch (data) {
     case 'market_overview':
       return getMarketOverviewReply(env);
@@ -245,6 +273,43 @@ async function cancelOrderReply(env: Env, telegramUserId: string, botId: string,
 
   return {
     text: `订单 ${cancelled.orderId} 已取消，当前状态：${cancelled.status}。你现在可以再发 /orders 看最新列表。`,
+  };
+}
+
+async function cancelOpenOrderCallbackReply(env: Env, telegramUserId: string, botId: string, orderId: string) {
+  const account = await getTradingAccount(env, telegramUserId, botId);
+  if (!account) {
+    return buildTradeEntryReply(false);
+  }
+
+  if (!orderId) {
+    return { text: '这个撤单按钮没带订单号，你可以重新打开 /openorders 再试一次。' };
+  }
+
+  const cancelled = await cancelLiveOrder(env, orderId, account.auth_mode);
+  if (!cancelled) {
+    return {
+      text: '当前还没配置真实下单 API，所以这笔未成交单暂时还不能直接撤。',
+    };
+  }
+
+  const existing = await getTradeEventByOrderId(env, telegramUserId, botId, cancelled.orderId);
+  if (existing?.order_id) {
+    await updateTradeEventStatus(
+      env,
+      telegramUserId,
+      botId,
+      cancelled.orderId,
+      cancelled.status,
+      JSON.stringify({
+        previous_payload: safeParseJson(existing.payload_json),
+        cancel_result: cancelled.detail,
+      }),
+    );
+  }
+
+  return {
+    text: `订单 ${cancelled.orderId} 已取消，当前状态：${cancelled.status}。你可以继续翻 open orders，或者稍后再刷新确认列表。`,
   };
 }
 
@@ -353,6 +418,15 @@ function parseCommandPage(text: string): number {
   const parts = text.trim().split(/\s+/);
   const last = parts.at(-1);
   const page = Number(last);
+  if (!Number.isFinite(page) || page < 1) {
+    return 1;
+  }
+  return Math.floor(page);
+}
+
+function parseCallbackPage(data: string): number {
+  const pageText = data.split(':').at(-1) ?? '1';
+  const page = Number(pageText);
   if (!Number.isFinite(page) || page < 1) {
     return 1;
   }

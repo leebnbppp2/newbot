@@ -1,5 +1,5 @@
 /**
- * Phase 11 reply builders.
+ * Phase 13 reply builders.
  */
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
@@ -199,7 +199,13 @@ export function buildOpenOrdersReply(orders: RemoteOpenOrder[], page = 1, pageSi
   ));
   return {
     text: [`当前 ${orders.length} 条未成交订单：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines].join('\n'),
-    replyMarkup: buildMainMenuMarkup(),
+    replyMarkup: {
+      inline_keyboard: [
+        ...buildOpenOrderActionRows(items),
+        ...buildPaginationRows('openorders_page', currentPage, totalPages),
+        ...buildMainMenuMarkup().inline_keyboard,
+      ],
+    },
   };
 }
 
@@ -221,7 +227,7 @@ export function buildPositionsReply(events: TradeEventRow[]): BotReply {
   };
 }
 
-export function buildRemotePositionsReply(positions: RemotePosition[]): BotReply {
+export function buildRemotePositionsReply(positions: RemotePosition[], page = 1, pageSize = 2): BotReply {
   if (positions.length === 0) {
     return {
       text: '你这边暂时没有持仓。',
@@ -229,7 +235,15 @@ export function buildRemotePositionsReply(positions: RemotePosition[]): BotReply
     };
   }
 
-  const lines = positions.slice(0, 5).map((position, index) => {
+  const { items, totalPages, currentPage } = paginateItems(positions, page, pageSize);
+  const totalExposure = positions.reduce((sum, position) => sum + position.sizeUsdc, 0);
+  const totalPnl = positions.reduce((sum, position) => {
+    if (typeof position.avgPrice !== 'number' || typeof position.currentPrice !== 'number') {
+      return sum;
+    }
+    return sum + ((position.currentPrice - position.avgPrice) * position.sizeUsdc);
+  }, 0);
+  const lines = items.map((position, index) => {
     const pnlText = typeof position.avgPrice === 'number' && typeof position.currentPrice === 'number'
       ? ` · 浮动 ${formatSignedUsd((position.currentPrice - position.avgPrice) * position.sizeUsdc)}`
       : '';
@@ -237,8 +251,19 @@ export function buildRemotePositionsReply(positions: RemotePosition[]): BotReply
   });
 
   return {
-    text: [`当前 ${Math.min(positions.length, 5)} 条持仓：`, ...lines].join('\n'),
-    replyMarkup: buildMainMenuMarkup(),
+    text: [
+      `当前 ${positions.length} 条持仓：`,
+      `第 ${currentPage} 页 / 共 ${totalPages} 页`,
+      `总敞口：${formatUsdc(totalExposure)}`,
+      `总浮动：${formatSignedUsd(totalPnl)}`,
+      ...lines,
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        ...buildPaginationRows('positions_page', currentPage, totalPages),
+        ...buildMainMenuMarkup().inline_keyboard,
+      ],
+    },
   };
 }
 
@@ -257,7 +282,12 @@ export function buildFillsReply(fills: RemoteFill[], page = 1, pageSize = 2): Bo
 
   return {
     text: [`最近 ${fills.length} 条成交记录：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines].join('\n'),
-    replyMarkup: buildMainMenuMarkup(),
+    replyMarkup: {
+      inline_keyboard: [
+        ...buildPaginationRows('fills_page', currentPage, totalPages),
+        ...buildMainMenuMarkup().inline_keyboard,
+      ],
+    },
   };
 }
 
@@ -356,7 +386,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 11 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也可以直接点菜单继续走。',
+    text: '我先记下了。现在 Phase 13 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也能直接点分页和撤单按钮继续走。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -404,6 +434,42 @@ function paginateItems<T>(items: T[], page: number, pageSize: number): { items: 
     currentPage,
     totalPages,
   };
+}
+
+function buildPaginationRows(prefix: string, currentPage: number, totalPages: number): TelegramMenuMarkup['inline_keyboard'] {
+  if (totalPages <= 1) {
+    return [];
+  }
+
+  const row: Array<{ text: string; callback_data: string }> = [];
+  if (currentPage > 1) {
+    row.push({ text: '上一页', callback_data: `${prefix}:${currentPage - 1}` });
+  }
+  if (currentPage < totalPages) {
+    row.push({ text: '下一页', callback_data: `${prefix}:${currentPage + 1}` });
+  }
+  return row.length > 0 ? [row] : [];
+}
+
+function buildOpenOrderActionRows(orders: RemoteOpenOrder[]): TelegramMenuMarkup['inline_keyboard'] {
+  return orders.map((order) => ([{
+    text: `撤单 ${shortOrderId(order.orderId)}`,
+    callback_data: `cancel_open_order:${order.orderId}`,
+  }]));
+}
+
+function shortOrderId(value: string): string {
+  if (value.length <= 14) {
+    return value;
+  }
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+function formatUsdc(value: number): string {
+  if (Number.isInteger(value)) {
+    return `${value} USDC`;
+  }
+  return `${value.toFixed(2)} USDC`;
 }
 
 function formatSignedUsd(value: number): string {

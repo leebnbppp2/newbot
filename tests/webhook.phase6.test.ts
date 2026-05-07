@@ -218,6 +218,36 @@ function makeMessageRequest(text: string) {
   });
 }
 
+function makeCallbackRequest(data: string) {
+  return new Request('https://example.com/telegram/webhook/crypto_zh', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-telegram-bot-api-secret-token': 'test-secret',
+    },
+    body: JSON.stringify({
+      update_id: 2,
+      callback_query: {
+        id: 'cbq-phase13',
+        data,
+        from: {
+          id: 1001,
+          is_bot: false,
+          first_name: 'Dora',
+          last_name: 'Lee',
+          username: 'dora',
+          language_code: 'zh-hans',
+        },
+        message: {
+          message_id: 77,
+          text: 'old portfolio menu',
+          chat: { id: 2001, type: 'private' },
+        },
+      },
+    }),
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -596,10 +626,93 @@ describe('handleTelegramWebhook phase 6', () => {
 
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
-    const payload = JSON.parse(String(init.body)) as { text: string };
+    const payload = JSON.parse(String(init.body)) as {
+      text: string;
+      reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+    };
     expect(payload.text).toContain('第 2 页');
     expect(payload.text).toContain('live-open-3');
     expect(payload.text).not.toContain('live-open-1');
+    expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ callback_data: 'cancel_open_order:live-open-3' }),
+        expect.objectContaining({ callback_data: 'openorders_page:1' }),
+      ]),
+    );
+  });
+
+  it('handles open orders pagination callback and edits the message in place', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    db.marketCache.set('portfolio:openorders:crypto_zh:1001', {
+      slug: 'portfolio:openorders:crypto_zh:1001',
+      data_json: JSON.stringify([
+        { orderId: 'live-open-1', marketSlug: 'btc-break-120k-2026', outcome: 'Yes', amountUsdc: 35, status: 'open' },
+        { orderId: 'live-open-2', marketSlug: 'eth-etf-inflows', outcome: 'No', amountUsdc: 20, status: 'open' },
+        { orderId: 'live-open-3', marketSlug: 'sol-ath', outcome: 'Yes', amountUsdc: 15, status: 'open' },
+      ]),
+      expires_at: '2099-01-01T00:00:00.000Z',
+    });
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('openorders_page:2'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      text: string;
+      reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+    };
+    expect(payload.text).toContain('第 2 页 / 共 2 页');
+    expect(payload.text).toContain('live-open-3');
+    expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ callback_data: 'cancel_open_order:live-open-3' }),
+        expect.objectContaining({ callback_data: 'openorders_page:1' }),
+      ]),
+    );
+  });
+
+  it('cancels an open order directly from callback actions', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === 'https://orders.example.com/orders/live-open-2/cancel') {
+        return new Response(JSON.stringify({ orderId: 'live-open-2', status: 'cancelled' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('cancel_open_order:live-open-2'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('订单 live-open-2 已取消');
   });
 
   it('returns cached live positions summary with pnl when remote portfolio API is unavailable', async () => {
@@ -625,7 +738,13 @@ describe('handleTelegramWebhook phase 6', () => {
       POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
       POLYMARKET_ORDER_API_KEY: 'order-key',
     });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('oops', { status: 500 }));
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === 'https://orders.example.com/portfolio/positions?bot_id=crypto_zh&telegram_user_id=1001') {
+        return new Response('oops', { status: 500 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
 
     const response = await handleTelegramWebhook(makeMessageRequest('/positions'), env, 'crypto_zh');
 
@@ -633,8 +752,59 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('当前 2 条持仓');
+    expect(payload.text).toContain('总敞口：104 USDC');
+    expect(payload.text).toContain('总浮动：+$6.24');
     expect(payload.text).toContain('浮动');
     expect(payload.text).toContain('btc-break-120k-2026');
+  });
+
+  it('paginates remote positions and adds callback pagination controls', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === 'https://orders.example.com/portfolio/positions?bot_id=crypto_zh&telegram_user_id=1001') {
+        return new Response(JSON.stringify({
+          positions: [
+            { marketSlug: 'btc-break-120k-2026', outcome: 'Yes', sizeUsdc: 80, avgPrice: 0.61, currentPrice: 0.7 },
+            { marketSlug: 'eth-etf-inflows', outcome: 'No', sizeUsdc: 24, avgPrice: 0.42, currentPrice: 0.38 },
+            { marketSlug: 'sol-ath', outcome: 'Yes', sizeUsdc: 12, avgPrice: 0.51, currentPrice: 0.55 },
+          ],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/positions 2'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      text: string;
+      reply_markup?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+    };
+    expect(payload.text).toContain('第 2 页 / 共 2 页');
+    expect(payload.text).toContain('总敞口：116 USDC');
+    expect(payload.text).toContain('总浮动：+$6.72');
+    expect(payload.text).toContain('sol-ath');
+    expect(payload.text).not.toContain('btc-break-120k-2026');
+    expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ callback_data: 'positions_page:1' }),
+      ]),
+    );
   });
 
   it('returns paginated recent fills from the remote portfolio API', async () => {
