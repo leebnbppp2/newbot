@@ -1,5 +1,5 @@
 /**
- * Phase 15 order gateway: lifecycle + portfolio reads + local cache.
+ * Phase 17 order gateway: lifecycle + portfolio reads + local cache.
  */
 
 import type { RemoteFill, RemoteOpenOrder, RemotePosition, MarketItem } from '../agent/replies';
@@ -49,7 +49,17 @@ export interface BuilderAttributionDetail {
   attributionMode: 'builder_program' | 'none';
 }
 
+interface SignatureEnvelope {
+  protocolVersion: string;
+  bodySha256: string;
+  timestampMs: string;
+  nonce: string;
+  signatureInput: string;
+  signature: string;
+}
+
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const ORDER_PROTOCOL_VERSION = 'polymarket_clob_v2';
 
 export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Promise<ExecuteBuyOrderResult> {
   const liveConfig = getLiveOrderConfig(env);
@@ -67,11 +77,11 @@ export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Pr
   }
 
   const requestBody = buildLiveOrderPayload(input, liveConfig.builderTag, liveConfig.builderApiKey);
-  const headers = await buildSignedHeaders(liveConfig, requestBody, input.account.auth_mode);
+  const signing = await buildSignedHeaders(liveConfig, requestBody, input.account.auth_mode);
 
   const response = await fetch(`${liveConfig.baseUrl}/orders`, {
     method: 'POST',
-    headers,
+    headers: signing.headers,
     body: JSON.stringify(requestBody),
   });
 
@@ -90,6 +100,7 @@ export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Pr
       signed: Boolean(liveConfig.signingSecret),
       auth_mode: input.account.auth_mode,
       builder_attribution: buildBuilderAttributionDetail(liveConfig),
+      signature_envelope: signing.signatureEnvelope,
     },
     builderAttribution: buildBuilderAttributionDetail(liveConfig),
   };
@@ -135,11 +146,11 @@ export async function cancelLiveOrder(env: Env, orderId: string, authMode: strin
     auth_mode: authMode,
     action: 'cancel',
   };
-  const headers = await buildSignedHeaders(liveConfig, requestBody, authMode);
+  const signing = await buildSignedHeaders(liveConfig, requestBody, authMode);
 
   const response = await fetch(`${liveConfig.baseUrl}/orders/${encodeURIComponent(orderId)}/cancel`, {
     method: 'POST',
-    headers,
+    headers: signing.headers,
     body: JSON.stringify(requestBody),
   });
   const payload = (await safeJson(response)) as { orderId?: string; status?: string; [key: string]: unknown };
@@ -282,7 +293,11 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
   };
 }
 
-async function buildSignedHeaders(config: LiveOrderConfig, payload: Record<string, unknown>, authMode: string): Promise<Record<string, string>> {
+async function buildSignedHeaders(
+  config: LiveOrderConfig,
+  payload: Record<string, unknown>,
+  authMode: string,
+): Promise<{ headers: Record<string, string>; signatureEnvelope: SignatureEnvelope | null }> {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     authorization: `Bearer ${config.apiKey}`,
@@ -291,18 +306,43 @@ async function buildSignedHeaders(config: LiveOrderConfig, payload: Record<strin
   };
 
   if (config.signingSecret) {
-    headers['x-order-signature'] = await signPayload(payload, config.signingSecret, authMode);
+    const signatureEnvelope = await signPayload(payload, config.signingSecret, authMode);
+    headers['x-order-signature'] = signatureEnvelope.signature;
+    headers['x-order-body-sha256'] = signatureEnvelope.bodySha256;
+    headers['x-order-signature-input'] = signatureEnvelope.signatureInput;
+    headers['x-order-protocol-version'] = signatureEnvelope.protocolVersion;
+    headers['x-order-timestamp-ms'] = signatureEnvelope.timestampMs;
+    headers['x-order-nonce'] = signatureEnvelope.nonce;
+    return { headers, signatureEnvelope };
   }
 
-  return headers;
+  return { headers, signatureEnvelope: null };
 }
 
-async function signPayload(payload: Record<string, unknown>, signingSecret: string, authMode: string): Promise<string> {
+async function signPayload(payload: Record<string, unknown>, signingSecret: string, authMode: string): Promise<SignatureEnvelope> {
+  const canonicalPayload = JSON.stringify(payload);
+  const bodySha256 = await sha256Hex(canonicalPayload);
+  const timestampMs = String(payload.timestamp_ms ?? Date.now());
+  const nonce = String(payload.nonce ?? '');
+  const signatureInput = [
+    `body_sha256=${bodySha256}`,
+    `timestamp_ms=${timestampMs}`,
+    `nonce=${nonce}`,
+    `auth_mode=${authMode}`,
+    `protocol_version=${ORDER_PROTOCOL_VERSION}`,
+  ].join(',');
   const encodedSecret = new TextEncoder().encode(`${authMode}:${signingSecret}`);
   const key = await crypto.subtle.importKey('raw', encodedSecret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const encodedPayload = new TextEncoder().encode(JSON.stringify(payload));
+  const encodedPayload = new TextEncoder().encode(signatureInput);
   const signature = await crypto.subtle.sign('HMAC', key, encodedPayload);
-  return toHex(signature);
+  return {
+    protocolVersion: ORDER_PROTOCOL_VERSION,
+    bodySha256,
+    timestampMs,
+    nonce,
+    signatureInput,
+    signature: toHex(signature),
+  };
 }
 
 async function fetchLiveOrderStatus(config: LiveOrderConfig, orderId: string): Promise<{ status: string; detail: Record<string, unknown> } | null> {
@@ -338,6 +378,12 @@ function safeParseJson(value: string | null): unknown {
 
 function toHex(input: ArrayBuffer): string {
   return Array.from(new Uint8Array(input)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return toHex(digest);
 }
 
 function buildBuilderAttributionDetail(config: LiveOrderConfig): BuilderAttributionDetail | null {

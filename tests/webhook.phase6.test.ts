@@ -402,6 +402,13 @@ describe('handleTelegramWebhook phase 6', () => {
         });
         const headers = init?.headers as Record<string, string>;
         expect(headers['x-order-signature']).toBeTruthy();
+        expect(headers['x-order-body-sha256']).toMatch(/^[a-f0-9]{64}$/);
+        expect(headers['x-order-signature-input']).toContain('body_sha256=');
+        expect(headers['x-order-signature-input']).toContain('timestamp_ms=');
+        expect(headers['x-order-signature-input']).toContain('nonce=');
+        expect(headers['x-order-protocol-version']).toBe('polymarket_clob_v2');
+        expect(headers['x-order-timestamp-ms']).toMatch(/^\d+$/);
+        expect(headers['x-order-nonce']).toMatch(/^[a-f0-9]+$/);
         const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
         expect(payload.market_slug).toBe('btc-break-120k-2026');
         expect(payload.token_id).toBe('111');
@@ -440,6 +447,8 @@ describe('handleTelegramWebhook phase 6', () => {
     });
     expect(db.tradeEvents[0]?.payload_json).toContain('builder_attribution');
     expect(db.tradeEvents[0]?.payload_json).toContain('newbot-phase8');
+    expect(db.tradeEvents[0]?.payload_json).toContain('signature_envelope');
+    expect(db.tradeEvents[0]?.payload_json).toContain('polymarket_clob_v2');
     const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('真实下单请求已经发出');
@@ -574,11 +583,17 @@ describe('handleTelegramWebhook phase 6', () => {
     const env = makeEnv(db, {
       POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
       POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
     });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === 'https://orders.example.com/orders/live-ord-123/cancel') {
         expect(init?.method).toBe('POST');
+        const headers = init?.headers as Record<string, string>;
+        expect(headers['x-order-signature']).toBeTruthy();
+        expect(headers['x-order-body-sha256']).toMatch(/^[a-f0-9]{64}$/);
+        expect(headers['x-order-signature-input']).toContain('body_sha256=');
+        expect(headers['x-order-protocol-version']).toBe('polymarket_clob_v2');
         return new Response(JSON.stringify({ orderId: 'live-ord-123', status: 'cancelled' }), { status: 200 });
       }
       return new Response(JSON.stringify({ ok: true }), { status: 200 });

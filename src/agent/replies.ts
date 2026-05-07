@@ -1,5 +1,5 @@
 /**
- * Phase 15 reply builders.
+ * Phase 17 reply builders.
  */
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
@@ -397,7 +397,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 15 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也能直接点分页、撤单，并看到已实现/未实现盈亏和分页 token。',
+    text: '我先记下了。现在 Phase 17 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也会在 live 请求里附带更正式的签名头和 signature envelope。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
