@@ -1,11 +1,13 @@
 /**
- * Trade event helpers for Phase 6 simulated order flow.
+ * Trade event helpers for Phase 10 live order sync flow.
  */
 
 import type { Env } from '../types';
 
 export interface TradeEventRow {
   id?: number;
+  telegram_user_id?: string;
+  bot_id?: string;
   event_type: string;
   market_slug: string;
   outcome: string;
@@ -68,7 +70,7 @@ export async function listRecentTradeEvents(
   limit = 5,
 ): Promise<TradeEventRow[]> {
   const result = await env.DB.prepare(
-    `SELECT id, event_type, market_slug, outcome, token_id, amount_usdc, status, order_id, payload_json, created_at
+    `SELECT id, telegram_user_id, bot_id, event_type, market_slug, outcome, token_id, amount_usdc, status, order_id, payload_json, created_at
        FROM trade_events
       WHERE telegram_user_id = ? AND bot_id = ?
       ORDER BY id DESC
@@ -78,4 +80,42 @@ export async function listRecentTradeEvents(
     .all<TradeEventRow>();
 
   return result.results ?? [];
+}
+
+export async function updateTradeEventStatus(
+  env: Env,
+  telegramUserId: string,
+  botId: string,
+  orderId: string,
+  status: string,
+  payloadJson: string | null,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE trade_events
+        SET status = ?,
+            payload_json = ?
+      WHERE order_id = ?
+        AND telegram_user_id = ?
+        AND bot_id = ?`,
+  )
+    .bind(status, payloadJson, orderId, telegramUserId, botId)
+    .run();
+}
+
+export async function getTradeEventByOrderId(
+  env: Env,
+  telegramUserId: string,
+  botId: string,
+  orderId: string,
+): Promise<TradeEventRow | null> {
+  return env.DB.prepare(
+    `SELECT id, telegram_user_id, bot_id, event_type, market_slug, outcome, token_id, amount_usdc, status, order_id, payload_json, created_at
+       FROM trade_events
+      WHERE order_id = ?
+        AND telegram_user_id = ?
+        AND bot_id = ?
+      LIMIT 1`,
+  )
+    .bind(orderId, telegramUserId, botId)
+    .first<TradeEventRow>();
 }

@@ -16,10 +16,15 @@ import {
 } from '../agent/replies';
 import { createAccountLinkSession } from '../db/account_sessions';
 import { appendConversationTurn } from '../db/conversations';
-import { createTradeEvent, listRecentTradeEvents } from '../db/trade_events';
+import {
+  createTradeEvent,
+  getTradeEventByOrderId,
+  listRecentTradeEvents,
+  updateTradeEventStatus,
+} from '../db/trade_events';
 import { getTradingAccount, getTradingAccountStatus, upsertTelegramUser } from '../db/users';
 import { findBestMarket, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
-import { enrichTradeEventsWithLiveStatus, executeBuyOrder } from '../lib/order_gateway';
+import { cancelLiveOrder, enrichTradeEventsWithLiveStatus, executeBuyOrder } from '../lib/order_gateway';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
@@ -122,7 +127,15 @@ async function resolveReply(
   if (normalized === '/orders') {
     const events = await listRecentTradeEvents(env, telegramUserId, botId);
     const enrichedEvents = await enrichTradeEventsWithLiveStatus(env, events);
+    await persistEnrichedTradeEvents(env, telegramUserId, botId, events, enrichedEvents);
     return buildOrdersReply(enrichedEvents);
+  }
+
+  if (normalized.startsWith('/cancel ')) {
+    const orderId = normalized.replace(/^\/cancel\s+/, '').trim();
+    if (orderId.length > 0) {
+      return cancelOrderReply(env, telegramUserId, botId, orderId);
+    }
   }
 
   if (normalized === '/positions') {
@@ -180,6 +193,62 @@ async function resolveCallbackReply(
 async function createLinkAccountReply(env: Env, telegramUserId: string, botId: string) {
   const session = await createAccountLinkSession(env, telegramUserId, botId);
   return buildLinkAccountReply(session.token, session.expiresAt);
+}
+
+async function cancelOrderReply(env: Env, telegramUserId: string, botId: string, orderId: string) {
+  const account = await getTradingAccount(env, telegramUserId, botId);
+  if (!account) {
+    return buildTradeEntryReply(false);
+  }
+
+  const existing = await getTradeEventByOrderId(env, telegramUserId, botId, orderId);
+  if (!existing || !existing.order_id) {
+    return {
+      text: `我没找到订单号 ${orderId} 对应的记录。你可以先发 /orders 看看当前有哪些单。`,
+    };
+  }
+
+  const cancelled = await cancelLiveOrder(env, existing.order_id, account.auth_mode);
+  if (!cancelled) {
+    return {
+      text: '当前还没配置真实下单 API，所以这笔 live 订单暂时没法撤。',
+    };
+  }
+
+  await updateTradeEventStatus(
+    env,
+    telegramUserId,
+    botId,
+    cancelled.orderId,
+    cancelled.status,
+    JSON.stringify({
+      previous_payload: safeParseJson(existing.payload_json),
+      cancel_result: cancelled.detail,
+    }),
+  );
+
+  return {
+    text: `订单 ${cancelled.orderId} 已取消，当前状态：${cancelled.status}。你现在可以再发 /orders 看最新列表。`,
+  };
+}
+
+async function persistEnrichedTradeEvents(
+  env: Env,
+  telegramUserId: string,
+  botId: string,
+  originalEvents: Awaited<ReturnType<typeof listRecentTradeEvents>>,
+  enrichedEvents: Awaited<ReturnType<typeof enrichTradeEventsWithLiveStatus>>,
+) {
+  for (const [index, enriched] of enrichedEvents.entries()) {
+    const original = originalEvents[index];
+    if (!original?.order_id || !enriched.order_id) {
+      continue;
+    }
+    if (original.status === enriched.status && original.payload_json === enriched.payload_json) {
+      continue;
+    }
+    await updateTradeEventStatus(env, telegramUserId, botId, enriched.order_id, enriched.status, enriched.payload_json);
+  }
 }
 
 async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, rawText: string) {
@@ -266,4 +335,15 @@ function normalizeOutcome(value: string): string | null {
     return 'No';
   }
   return null;
+}
+
+function safeParseJson(value: string | null): unknown {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }

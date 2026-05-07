@@ -80,6 +80,13 @@ class FakePreparedStatement {
       return { max_turn_id: maxTurnId } as T;
     }
 
+    if (this.query.includes('FROM trade_events') && this.query.includes('WHERE order_id = ?')) {
+      const [orderId, telegramUserId, botId] = this.values as [string, string, string];
+      return (
+        this.db.tradeEvents.find((row) => row.order_id === orderId && row.telegram_user_id === telegramUserId && row.bot_id === botId) ?? null
+      ) as T | null;
+    }
+
     throw new Error(`Unsupported first query: ${this.query}`);
   }
 
@@ -99,6 +106,16 @@ class FakePreparedStatement {
     if (this.query.includes('INSERT INTO conversations')) {
       const [userId, turnId, role, content] = this.values as [string, number, string, string];
       this.db.conversations.push({ user_id: userId, turn_id: turnId, role, content });
+      return { success: true };
+    }
+
+    if (this.query.includes('UPDATE trade_events')) {
+      const [status, payloadJson, orderId, telegramUserId, botId] = this.values as [string, string, string, string, string];
+      const existing = this.db.tradeEvents.find((row) => row.order_id === orderId && row.telegram_user_id === telegramUserId && row.bot_id === botId);
+      if (existing) {
+        existing.status = status;
+        existing.payload_json = payloadJson;
+      }
       return { success: true };
     }
 
@@ -423,6 +440,104 @@ describe('handleTelegramWebhook phase 6', () => {
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('matched');
     expect(payload.text).toContain('live-ord-123');
+  });
+
+  it('cancels a live order and persists the cancelled status', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    db.tradeEvents.push({
+      id: 1,
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      event_type: 'buy',
+      market_slug: 'btc-break-120k-2026',
+      outcome: 'Yes',
+      token_id: '111',
+      amount_usdc: 50,
+      status: 'live_submitted',
+      order_id: 'live-ord-123',
+      payload_json: '{}',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === 'https://orders.example.com/orders/live-ord-123/cancel') {
+        expect(init?.method).toBe('POST');
+        return new Response(JSON.stringify({ orderId: 'live-ord-123', status: 'cancelled' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/cancel live-ord-123'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(db.tradeEvents[0]).toMatchObject({
+      status: 'live_cancelled',
+      order_id: 'live-ord-123',
+    });
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('已取消');
+    expect(payload.text).toContain('live-ord-123');
+  });
+
+  it('refreshes live order status into persistence during /orders', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    db.tradeEvents.push({
+      id: 1,
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      event_type: 'buy',
+      market_slug: 'btc-break-120k-2026',
+      outcome: 'Yes',
+      token_id: '111',
+      amount_usdc: 50,
+      status: 'live_submitted',
+      order_id: 'live-ord-123',
+      payload_json: '{"before":"submitted"}',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === 'https://orders.example.com/orders/live-ord-123') {
+        return new Response(JSON.stringify({ orderId: 'live-ord-123', status: 'matched' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/orders'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(db.tradeEvents[0]?.status).toBe('live_matched');
+    expect(db.tradeEvents[0]?.payload_json).toContain('matched');
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('live_matched');
   });
 
   it('lists recent simulated orders', async () => {

@@ -1,13 +1,14 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 9：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 10：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
 - Telegram 市场浏览 / 搜索 / 详情
 - 账户绑定 portal
 - auth-mode aware 的 signed live/simulated 双路径下单准备层
-- live 订单状态回查准备
+- live 订单状态回查 + 本地状态回写
+- live 撤单入口
 - 订单 / 仓位视图
 
 ## 5 步部署
@@ -33,7 +34,7 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 ```
 
-如果你要启用 Phase 9 的 live order request，还可以额外提供：
+如果你要启用 Phase 10 的 live order request，还可以额外提供：
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_ORDER_API_KEY`
 - `POLYMARKET_ORDER_SIGNING_SECRET`
@@ -57,7 +58,7 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 9 行为
+## 当前 Phase 10 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
@@ -77,9 +78,10 @@ curl https://<your-worker>.workers.dev/healthz
     - 有 live API 配置就发真实请求
     - 有 signing secret 会附带 signed payload 和 `x-order-signature`
     - 没有配置就自动回退到模拟单
-  - `/orders` → 返回最近订单记录；如果是 live 订单且配置了 order API，会额外尝试刷新订单状态
+  - `/orders` → 返回最近订单记录；如果是 live 订单且配置了 order API，会额外刷新订单状态，并把新状态回写到本地 `trade_events`
+  - `/cancel <orderId>` → 对 live 订单发撤单请求，并把取消后的状态回写到本地 `trade_events`
   - `/positions` → 返回当前记录里的模拟仓位视图
-  - 其他文本 → 先记录对话，再返回 Phase 9 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 10 引导文案
 - Telegram 菜单按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
@@ -92,4 +94,4 @@ curl https://<your-worker>.workers.dev/healthz
   - `market_cache` 会缓存市场概览和搜索结果
   - `user_account_sessions` 会生成并完成账户接入会话
   - `user_trading_accounts` 会记录已绑定账户基础信息
-  - `trade_events` 会记录 live / simulated 两类订单事件以及请求细节
+  - `trade_events` 会记录 live / simulated 两类订单事件，并持续同步 live 状态

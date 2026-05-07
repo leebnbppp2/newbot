@@ -1,5 +1,5 @@
 /**
- * Phase 9 order gateway: auth-mode aware signing prep + live status refresh.
+ * Phase 10 order gateway: auth-mode aware signing prep + live status refresh + cancel flow.
  */
 
 import type { MarketItem } from '../agent/replies';
@@ -17,6 +17,12 @@ export interface ExecuteBuyOrderInput {
 
 export interface ExecuteBuyOrderResult {
   mode: 'live' | 'simulated';
+  status: string;
+  orderId: string;
+  detail: Record<string, unknown>;
+}
+
+export interface CancelOrderResult {
   status: string;
   orderId: string;
   detail: Record<string, unknown>;
@@ -47,16 +53,7 @@ export async function executeBuyOrder(
   }
 
   const requestBody = buildLiveOrderPayload(input, liveConfig.builderTag);
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    authorization: `Bearer ${liveConfig.apiKey}`,
-    'x-auth-mode': input.account.auth_mode,
-    'x-signature-type': String(requestBody.signature_type),
-  };
-
-  if (liveConfig.signingSecret) {
-    headers['x-order-signature'] = await signPayload(requestBody, liveConfig.signingSecret, input.account.auth_mode);
-  }
+  const headers = await buildSignedHeaders(liveConfig, requestBody, input.account.auth_mode);
 
   const response = await fetch(`${liveConfig.baseUrl}/orders`, {
     method: 'POST',
@@ -92,17 +89,57 @@ export async function enrichTradeEventsWithLiveStatus(env: Env, events: TradeEve
     if (!event.order_id || !event.status.startsWith('live_')) {
       return event;
     }
-    const status = await fetchLiveOrderStatus(liveConfig, event.order_id);
-    if (!status) {
+    const detail = await fetchLiveOrderStatus(liveConfig, event.order_id);
+    if (!detail) {
       return event;
     }
     return {
       ...event,
-      status,
+      status: detail.status,
+      payload_json: JSON.stringify({
+        previous_payload: safeParseJson(event.payload_json),
+        live_status_sync: detail.detail,
+      }),
     };
   }));
 
   return updated;
+}
+
+export async function cancelLiveOrder(
+  env: Env,
+  orderId: string,
+  authMode: string,
+): Promise<CancelOrderResult | null> {
+  const liveConfig = getLiveOrderConfig(env);
+  if (!liveConfig) {
+    return null;
+  }
+
+  const requestBody = {
+    order_id: orderId,
+    timestamp_ms: Date.now(),
+    nonce: crypto.randomUUID().replaceAll('-', ''),
+    auth_mode: authMode,
+    action: 'cancel',
+  };
+  const headers = await buildSignedHeaders(liveConfig, requestBody, authMode);
+
+  const response = await fetch(`${liveConfig.baseUrl}/orders/${encodeURIComponent(orderId)}/cancel`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(requestBody),
+  });
+  const payload = (await safeJson(response)) as { orderId?: string; status?: string; [key: string]: unknown };
+  if (!response.ok) {
+    throw new Error(`Live cancel API failed: ${response.status}`);
+  }
+
+  return {
+    status: normalizeLiveStatus(payload.status),
+    orderId: payload.orderId ?? orderId,
+    detail: payload,
+  };
 }
 
 function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
@@ -144,6 +181,25 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
   };
 }
 
+async function buildSignedHeaders(
+  config: LiveOrderConfig,
+  payload: Record<string, unknown>,
+  authMode: string,
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    authorization: `Bearer ${config.apiKey}`,
+    'x-auth-mode': authMode,
+    'x-signature-type': String(payload.signature_type ?? authMode),
+  };
+
+  if (config.signingSecret) {
+    headers['x-order-signature'] = await signPayload(payload, config.signingSecret, authMode);
+  }
+
+  return headers;
+}
+
 async function signPayload(payload: Record<string, unknown>, signingSecret: string, authMode: string): Promise<string> {
   const encodedSecret = new TextEncoder().encode(`${authMode}:${signingSecret}`);
   const key = await crypto.subtle.importKey(
@@ -158,7 +214,10 @@ async function signPayload(payload: Record<string, unknown>, signingSecret: stri
   return toHex(signature);
 }
 
-async function fetchLiveOrderStatus(config: LiveOrderConfig, orderId: string): Promise<string | null> {
+async function fetchLiveOrderStatus(
+  config: LiveOrderConfig,
+  orderId: string,
+): Promise<{ status: string; detail: Record<string, unknown> } | null> {
   const response = await fetch(`${config.baseUrl}/orders/${encodeURIComponent(orderId)}`, {
     method: 'GET',
     headers: {
@@ -168,8 +227,11 @@ async function fetchLiveOrderStatus(config: LiveOrderConfig, orderId: string): P
   if (!response.ok) {
     return null;
   }
-  const payload = (await safeJson(response)) as { status?: string };
-  return normalizeLiveStatus(payload.status);
+  const payload = (await safeJson(response)) as { status?: string; [key: string]: unknown };
+  return {
+    status: normalizeLiveStatus(payload.status),
+    detail: payload,
+  };
 }
 
 function normalizeLiveStatus(status: string | undefined): string {
@@ -183,6 +245,17 @@ function normalizeLiveStatus(status: string | undefined): string {
     return 'live_cancelled';
   }
   return status ?? 'live_submitted';
+}
+
+function safeParseJson(value: string | null): unknown {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function toHex(input: ArrayBuffer): string {
