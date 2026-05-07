@@ -5,6 +5,11 @@
 import type { BotReply } from '../agent/replies';
 import type { Env } from '../types';
 
+export interface CallbackToast {
+  text?: string;
+  showAlert?: boolean;
+}
+
 const TELEGRAM_HOST = 'https://api.telegram.org';
 
 function getBotToken(env: Env, secretName: 'BOT_TOKEN_CRYPTO_ZH'): string {
@@ -74,9 +79,12 @@ export async function answerCallbackQuery(
   env: Env,
   secretName: 'BOT_TOKEN_CRYPTO_ZH',
   callbackQueryId: string,
+  toast?: CallbackToast,
 ): Promise<void> {
   const response = await telegramApi(env, secretName, 'answerCallbackQuery', {
     callback_query_id: callbackQueryId,
+    text: toast?.text,
+    show_alert: toast?.showAlert,
   });
   if (!response.ok) {
     const detail = await response.text();

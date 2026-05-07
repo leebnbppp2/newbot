@@ -49,6 +49,21 @@ export interface BuilderAttributionDetail {
   attributionMode: 'builder_program' | 'none';
 }
 
+export type RemoteDataSource = 'live' | 'cache' | 'none';
+
+export interface RemoteCollectionResult<T> {
+  items: T[];
+  source: RemoteDataSource;
+  warning: string | null;
+}
+
+export interface OrderGatewayReadiness {
+  liveOrderApi: boolean;
+  signing: boolean;
+  builderAttribution: 'ready' | 'partial' | 'disabled';
+  warnings: string[];
+}
+
 interface SignatureEnvelope {
   protocolVersion: string;
   bodySha256: string;
@@ -165,61 +180,91 @@ export async function cancelLiveOrder(env: Env, orderId: string, authMode: strin
   };
 }
 
-export async function fetchLiveOpenOrders(env: Env, telegramUserId: string, botId: string): Promise<RemoteOpenOrder[]> {
+export async function fetchLiveOpenOrders(env: Env, telegramUserId: string, botId: string): Promise<RemoteCollectionResult<RemoteOpenOrder>> {
   const liveConfig = getLiveOrderConfig(env);
   const cacheKey = `portfolio:openorders:${botId}:${telegramUserId}`;
   if (!liveConfig) {
-    return readCache<RemoteOpenOrder>(env, cacheKey);
+    return buildCacheOnlyResult(await readCache<RemoteOpenOrder>(env, cacheKey), '当前还没接真实订单接口，先只展示本地缓存。');
   }
   const response = await fetch(`${liveConfig.baseUrl}/orders/open?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
     method: 'GET',
     headers: { authorization: `Bearer ${liveConfig.apiKey}` },
   });
   if (!response.ok) {
-    return readCache<RemoteOpenOrder>(env, cacheKey);
+    return buildFallbackResult(await readCache<RemoteOpenOrder>(env, cacheKey), '远端未成交订单暂时拉取失败，先给你上次缓存。');
   }
   const payload = (await safeJson(response)) as { orders?: RemoteOpenOrder[] };
   const orders = payload.orders ?? [];
   await writeCache(env, cacheKey, orders);
-  return orders;
+  return { items: orders, source: 'live', warning: null };
 }
 
-export async function fetchRemotePositions(env: Env, telegramUserId: string, botId: string): Promise<RemotePosition[]> {
+export async function fetchRemotePositions(env: Env, telegramUserId: string, botId: string): Promise<RemoteCollectionResult<RemotePosition>> {
   const liveConfig = getLiveOrderConfig(env);
   const cacheKey = `portfolio:positions:${botId}:${telegramUserId}`;
   if (!liveConfig) {
-    return readCache<RemotePosition>(env, cacheKey);
+    return buildCacheOnlyResult(await readCache<RemotePosition>(env, cacheKey), '当前还没接真实持仓接口，先只展示本地缓存。');
   }
   const response = await fetch(`${liveConfig.baseUrl}/portfolio/positions?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
     method: 'GET',
     headers: { authorization: `Bearer ${liveConfig.apiKey}` },
   });
   if (!response.ok) {
-    return readCache<RemotePosition>(env, cacheKey);
+    return buildFallbackResult(await readCache<RemotePosition>(env, cacheKey), '远端持仓暂时拉取失败，先给你上次缓存。');
   }
   const payload = (await safeJson(response)) as { positions?: RemotePosition[] };
   const positions = payload.positions ?? [];
   await writeCache(env, cacheKey, positions);
-  return positions;
+  return { items: positions, source: 'live', warning: null };
 }
 
-export async function fetchRemoteFills(env: Env, telegramUserId: string, botId: string): Promise<RemoteFill[]> {
+export async function fetchRemoteFills(env: Env, telegramUserId: string, botId: string): Promise<RemoteCollectionResult<RemoteFill>> {
   const liveConfig = getLiveOrderConfig(env);
   const cacheKey = `portfolio:fills:${botId}:${telegramUserId}`;
   if (!liveConfig) {
-    return readCache<RemoteFill>(env, cacheKey);
+    return buildCacheOnlyResult(await readCache<RemoteFill>(env, cacheKey), '当前还没接真实成交接口，先只展示本地缓存。');
   }
   const response = await fetch(`${liveConfig.baseUrl}/portfolio/fills?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
     method: 'GET',
     headers: { authorization: `Bearer ${liveConfig.apiKey}` },
   });
   if (!response.ok) {
-    return readCache<RemoteFill>(env, cacheKey);
+    return buildFallbackResult(await readCache<RemoteFill>(env, cacheKey), '远端成交记录暂时拉取失败，先给你上次缓存。');
   }
   const payload = (await safeJson(response)) as { fills?: RemoteFill[] };
   const fills = payload.fills ?? [];
   await writeCache(env, cacheKey, fills);
-  return fills;
+  return { items: fills, source: 'live', warning: null };
+}
+
+export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
+  const baseUrl = env.POLYMARKET_ORDER_API_BASE?.trim();
+  const apiKey = env.POLYMARKET_ORDER_API_KEY?.trim();
+  const signingSecret = env.POLYMARKET_ORDER_SIGNING_SECRET?.trim();
+  const builderTag = env.POLYMARKET_BUILDER_TAG?.trim();
+  const builderApiKey = env.POLYMARKET_BUILDER_API_KEY?.trim();
+  const warnings: string[] = [];
+
+  if (!baseUrl || !apiKey) {
+    warnings.push('live order API 还没完整配置。');
+  }
+  if ((builderTag && !builderApiKey) || (!builderTag && builderApiKey)) {
+    warnings.push('Builder Program 配置不完整，归因暂时不会完整生效。');
+  }
+  if ((baseUrl || apiKey) && !signingSecret) {
+    warnings.push('signing secret 还没配置，live 请求暂时不会带 canonical 签名头。');
+  }
+
+  const builderAttribution = builderTag && builderApiKey
+    ? 'ready'
+    : (builderTag || builderApiKey ? 'partial' : 'disabled');
+
+  return {
+    liveOrderApi: Boolean(baseUrl && apiKey),
+    signing: Boolean(baseUrl && apiKey && signingSecret),
+    builderAttribution,
+    warnings,
+  };
 }
 
 function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
@@ -235,6 +280,20 @@ function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
     builderTag: env.POLYMARKET_BUILDER_TAG?.trim() || null,
     builderApiKey: env.POLYMARKET_BUILDER_API_KEY?.trim() || null,
   };
+}
+
+function buildCacheOnlyResult<T>(items: T[], warning: string): RemoteCollectionResult<T> {
+  if (items.length > 0) {
+    return { items, source: 'cache', warning };
+  }
+  return { items, source: 'none', warning: null };
+}
+
+function buildFallbackResult<T>(items: T[], warning: string): RemoteCollectionResult<T> {
+  if (items.length > 0) {
+    return { items, source: 'cache', warning };
+  }
+  return { items, source: 'none', warning: '远端暂时不可用，而且本地也还没有可展示的缓存。' };
 }
 
 async function readCache<T>(env: Env, cacheKey: string): Promise<T[]> {

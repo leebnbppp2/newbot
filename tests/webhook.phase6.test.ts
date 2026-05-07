@@ -734,6 +734,9 @@ describe('handleTelegramWebhook phase 6', () => {
 
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, answerInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const answerPayload = JSON.parse(String(answerInit.body)) as { text?: string };
+    expect(answerPayload.text).toContain('当前还没接真实订单接口');
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as {
       text: string;
@@ -827,6 +830,7 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('当前 2 条持仓');
+    expect(payload.text).toContain('远端持仓暂时拉取失败，先给你上次缓存。');
     expect(payload.text).toContain('总敞口：104 USDC');
     expect(payload.text).toContain('已实现：+$0.00');
     expect(payload.text).toContain('未实现：+$6.24');

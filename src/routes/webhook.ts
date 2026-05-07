@@ -37,8 +37,14 @@ import {
   fetchRemotePositions,
 } from '../lib/order_gateway';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
+import type { CallbackToast } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
+
+interface CallbackReplyResult {
+  reply: Awaited<ReturnType<typeof buildDefaultReply>>;
+  callbackToast?: CallbackToast;
+}
 
 const TELEGRAM_SECRET_HEADER = 'x-telegram-bot-api-secret-token';
 
@@ -103,11 +109,11 @@ async function handleCallbackQuery(
   const conversationUserId = `${botId}:${telegramUserId}`;
   await appendConversationTurn(env, conversationUserId, 'user', `[callback] ${data}`);
 
-  const reply = await resolveCallbackReply(env, botId, telegramUserId, data);
-  await appendConversationTurn(env, conversationUserId, 'assistant', reply.text);
+  const callbackResult = await resolveCallbackReply(env, botId, telegramUserId, data);
+  await appendConversationTurn(env, conversationUserId, 'assistant', callbackResult.reply.text);
 
-  await answerCallbackQuery(env, secretName, callbackQuery.id);
-  await editTelegramMessage(env, secretName, chatId, messageId, reply);
+  await answerCallbackQuery(env, secretName, callbackQuery.id, callbackResult.callbackToast);
+  await editTelegramMessage(env, secretName, chatId, messageId, callbackResult.reply);
 }
 
 async function resolveReply(env: Env, botId: string, telegramUserId: string, text: string) {
@@ -139,15 +145,15 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
 
   if (normalized.startsWith('/openorders')) {
     const page = parseCommandPage(text);
-    const orders = await fetchLiveOpenOrders(env, telegramUserId, botId);
-    return buildOpenOrdersReply(orders, page);
+    const result = await fetchLiveOpenOrders(env, telegramUserId, botId);
+    return buildOpenOrdersReply(result.items, page, 2, result.source, result.warning);
   }
 
   if (normalized.startsWith('/positions')) {
     const page = parseCommandPage(text);
-    const remotePositions = await fetchRemotePositions(env, telegramUserId, botId);
-    if (remotePositions.length > 0) {
-      return buildRemotePositionsReply(remotePositions, page);
+    const positionsResult = await fetchRemotePositions(env, telegramUserId, botId);
+    if (positionsResult.items.length > 0) {
+      return buildRemotePositionsReply(positionsResult.items, page, 2, positionsResult.source, positionsResult.warning);
     }
     const events = await listRecentTradeEvents(env, telegramUserId, botId);
     return buildPositionsReply(events);
@@ -155,8 +161,8 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
 
   if (normalized.startsWith('/fills')) {
     const page = parseCommandPage(text);
-    const fills = await fetchRemoteFills(env, telegramUserId, botId);
-    return buildFillsReply(fills, page);
+    const fillsResult = await fetchRemoteFills(env, telegramUserId, botId);
+    return buildFillsReply(fillsResult.items, page, 2, fillsResult.source, fillsResult.warning);
   }
 
   if (normalized.startsWith('/cancel ')) {
@@ -187,27 +193,39 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
   return buildDefaultReply();
 }
 
-async function resolveCallbackReply(env: Env, botId: string, telegramUserId: string, data: string) {
+async function resolveCallbackReply(env: Env, botId: string, telegramUserId: string, data: string): Promise<CallbackReplyResult> {
   if (data.startsWith('openorders_page:')) {
     const page = parseCallbackPage(data);
-    const orders = await fetchLiveOpenOrders(env, telegramUserId, botId);
-    return buildOpenOrdersReply(orders, page);
+    const result = await fetchLiveOpenOrders(env, telegramUserId, botId);
+    return {
+      reply: buildOpenOrdersReply(result.items, page, 2, result.source, result.warning),
+      callbackToast: buildPaginationToast('未成交订单', page, result.source, result.warning),
+    };
   }
 
   if (data.startsWith('positions_page:')) {
     const page = parseCallbackPage(data);
-    const positions = await fetchRemotePositions(env, telegramUserId, botId);
-    if (positions.length > 0) {
-      return buildRemotePositionsReply(positions, page);
+    const positionsResult = await fetchRemotePositions(env, telegramUserId, botId);
+    if (positionsResult.items.length > 0) {
+      return {
+        reply: buildRemotePositionsReply(positionsResult.items, page, 2, positionsResult.source, positionsResult.warning),
+        callbackToast: buildPaginationToast('持仓', page, positionsResult.source, positionsResult.warning),
+      };
     }
     const events = await listRecentTradeEvents(env, telegramUserId, botId);
-    return buildPositionsReply(events);
+    return {
+      reply: buildPositionsReply(events),
+      callbackToast: { text: `持仓第 ${page} 页`, showAlert: false },
+    };
   }
 
   if (data.startsWith('fills_page:')) {
     const page = parseCallbackPage(data);
-    const fills = await fetchRemoteFills(env, telegramUserId, botId);
-    return buildFillsReply(fills, page);
+    const fillsResult = await fetchRemoteFills(env, telegramUserId, botId);
+    return {
+      reply: buildFillsReply(fillsResult.items, page, 2, fillsResult.source, fillsResult.warning),
+      callbackToast: buildPaginationToast('成交记录', page, fillsResult.source, fillsResult.warning),
+    };
   }
 
   if (data.startsWith('cancel_open_order:')) {
@@ -217,21 +235,24 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
 
   switch (data) {
     case 'market_overview':
-      return getMarketOverviewReply(env);
+      return { reply: await getMarketOverviewReply(env), callbackToast: { text: '已切到市场概览', showAlert: false } };
     case 'account_status': {
       const account = await getTradingAccount(env, telegramUserId, botId);
-      return buildAccountReply(account);
+      return { reply: buildAccountReply(account), callbackToast: { text: '已刷新账户状态', showAlert: false } };
     }
     case 'getting_started':
-      return buildGettingStartedReply();
+      return { reply: buildGettingStartedReply(), callbackToast: { text: '开始说明在这里', showAlert: false } };
     case 'start_link_account':
-      return createLinkAccountReply(env, telegramUserId, botId);
+      return { reply: await createLinkAccountReply(env, telegramUserId, botId), callbackToast: { text: '绑定入口已经准备好', showAlert: false } };
     case 'trade_entry': {
       const account = await getTradingAccountStatus(env, telegramUserId, botId);
-      return buildTradeEntryReply(Boolean(account));
+      return {
+        reply: buildTradeEntryReply(Boolean(account)),
+        callbackToast: { text: account ? '可以直接准备下单了' : '先完成账户绑定', showAlert: false },
+      };
     }
     default:
-      return buildDefaultReply();
+      return { reply: buildDefaultReply(), callbackToast: { text: '我先帮你切回主菜单', showAlert: false } };
   }
 }
 
@@ -283,20 +304,29 @@ async function cancelOpenOrderCallbackReply(
   botId: string,
   orderId: string,
   page: number,
-) {
+): Promise<CallbackReplyResult> {
   const account = await getTradingAccount(env, telegramUserId, botId);
   if (!account) {
-    return buildTradeEntryReply(false);
+    return {
+      reply: buildTradeEntryReply(false),
+      callbackToast: { text: '先完成账户绑定', showAlert: false },
+    };
   }
 
   if (!orderId) {
-    return { text: '这个撤单按钮没带订单号，你可以重新打开 /openorders 再试一次。' };
+    return {
+      reply: { text: '这个撤单按钮没带订单号，你可以重新打开 /openorders 再试一次。' },
+      callbackToast: { text: '这次没带上订单号', showAlert: false },
+    };
   }
 
   const cancelled = await cancelLiveOrder(env, orderId, account.auth_mode);
   if (!cancelled) {
     return {
-      text: '当前还没配置真实下单 API，所以这笔未成交单暂时还不能直接撤。',
+      reply: {
+        text: '当前还没配置真实下单 API，所以这笔未成交单暂时还不能直接撤。',
+      },
+      callbackToast: { text: '还没接真实撤单接口', showAlert: false },
     };
   }
 
@@ -315,8 +345,14 @@ async function cancelOpenOrderCallbackReply(
     );
   }
 
-  const orders = await fetchLiveOpenOrders(env, telegramUserId, botId);
-  return buildOpenOrdersReply(orders, page);
+  const ordersResult = await fetchLiveOpenOrders(env, telegramUserId, botId);
+  return {
+    reply: buildOpenOrdersReply(ordersResult.items, page, 2, ordersResult.source, ordersResult.warning),
+    callbackToast: {
+      text: ordersResult.warning ?? `订单 ${cancelled.orderId} 已撤掉`,
+      showAlert: false,
+    },
+  };
 }
 
 async function persistEnrichedTradeEvents(
@@ -475,4 +511,14 @@ function safeParseJson(value: string | null): unknown {
   } catch {
     return value;
   }
+}
+
+function buildPaginationToast(label: string, page: number, source: 'live' | 'cache' | 'none', warning: string | null) {
+  if (warning) {
+    return { text: warning, showAlert: false };
+  }
+  if (source === 'cache') {
+    return { text: `${label}第 ${page} 页（缓存）`, showAlert: false };
+  }
+  return { text: `${label}第 ${page} 页`, showAlert: false };
 }

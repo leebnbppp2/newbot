@@ -3,6 +3,7 @@
  */
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
+import type { RemoteDataSource } from '../lib/order_gateway';
 
 export interface TelegramMenuMarkup {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
@@ -187,7 +188,13 @@ export function buildOrdersReply(events: TradeEventRow[]): BotReply {
   };
 }
 
-export function buildOpenOrdersReply(orders: RemoteOpenOrder[], page = 1, pageSize = 2): BotReply {
+export function buildOpenOrdersReply(
+  orders: RemoteOpenOrder[],
+  page = 1,
+  pageSize = 2,
+  dataSource: RemoteDataSource = 'live',
+  warning: string | null = null,
+): BotReply {
   if (orders.length === 0) {
     return {
       text: '你这边暂时没有未成交订单。',
@@ -200,7 +207,12 @@ export function buildOpenOrdersReply(orders: RemoteOpenOrder[], page = 1, pageSi
     `${index + 1}. ${order.marketSlug}\n   ${order.outcome} · ${order.amountUsdc} USDC · ${order.status} · ${order.orderId}`
   ));
   return {
-    text: [`当前 ${orders.length} 条未成交订单：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines].join('\n'),
+    text: [
+      formatDataFreshnessLine(dataSource, warning),
+      `当前 ${orders.length} 条未成交订单：`,
+      `第 ${currentPage} 页 / 共 ${totalPages} 页`,
+      ...lines,
+    ].filter(Boolean).join('\n'),
     replyMarkup: {
       inline_keyboard: [
         ...buildOpenOrderActionRows(items, currentPage),
@@ -229,7 +241,13 @@ export function buildPositionsReply(events: TradeEventRow[]): BotReply {
   };
 }
 
-export function buildRemotePositionsReply(positions: RemotePosition[], page = 1, pageSize = 2): BotReply {
+export function buildRemotePositionsReply(
+  positions: RemotePosition[],
+  page = 1,
+  pageSize = 2,
+  dataSource: RemoteDataSource = 'live',
+  warning: string | null = null,
+): BotReply {
   if (positions.length === 0) {
     return {
       text: '你这边暂时没有持仓。',
@@ -260,6 +278,7 @@ export function buildRemotePositionsReply(positions: RemotePosition[], page = 1,
 
   return {
     text: [
+      formatDataFreshnessLine(dataSource, warning),
       `当前 ${positions.length} 条持仓：`,
       `第 ${currentPage} 页 / 共 ${totalPages} 页`,
       `总敞口：${formatUsdc(totalExposure)}`,
@@ -278,7 +297,13 @@ export function buildRemotePositionsReply(positions: RemotePosition[], page = 1,
   };
 }
 
-export function buildFillsReply(fills: RemoteFill[], page = 1, pageSize = 2): BotReply {
+export function buildFillsReply(
+  fills: RemoteFill[],
+  page = 1,
+  pageSize = 2,
+  dataSource: RemoteDataSource = 'live',
+  warning: string | null = null,
+): BotReply {
   if (fills.length === 0) {
     return {
       text: '最近还没有成交记录。',
@@ -292,7 +317,9 @@ export function buildFillsReply(fills: RemoteFill[], page = 1, pageSize = 2): Bo
   ));
 
   return {
-    text: [`最近 ${fills.length} 条成交记录：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines].join('\n'),
+    text: [formatDataFreshnessLine(dataSource, warning), `最近 ${fills.length} 条成交记录：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines]
+      .filter(Boolean)
+      .join('\n'),
     replyMarkup: {
       inline_keyboard: [
         ...buildPaginationRows('fills_page', currentPage, totalPages),
@@ -397,7 +424,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 17 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也会在 live 请求里附带更正式的签名头和 signature envelope。',
+    text: '我先记下了。现在 Phase 18 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也会在 live 请求里附带更正式的签名头、signature envelope，并在持仓/订单回退到缓存时直接告诉你。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -467,6 +494,19 @@ function buildOpenOrderActionRows(orders: RemoteOpenOrder[], page: number): Tele
     text: `撤单 ${shortOrderId(order.orderId)}`,
     callback_data: `cancel_open_order:${order.orderId}:${page}`,
   }]));
+}
+
+function formatDataFreshnessLine(dataSource: RemoteDataSource, warning: string | null): string | null {
+  if (warning) {
+    return warning;
+  }
+  if (dataSource === 'live') {
+    return '数据来源：实时';
+  }
+  if (dataSource === 'cache') {
+    return '数据来源：缓存';
+  }
+  return null;
 }
 
 function shortOrderId(value: string): string {

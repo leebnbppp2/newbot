@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 17：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 18：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -40,7 +40,7 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 ```
 
-如果你要启用 Phase 17 的 live order/portfolio request，还可以额外提供：
+如果你要启用 Phase 18 的 live order/portfolio request，还可以额外提供：
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_ORDER_API_KEY`
 - `POLYMARKET_ORDER_SIGNING_SECRET`
@@ -65,9 +65,13 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 17 行为
+## 当前 Phase 18 行为
 
-- `GET /healthz` → `{ ok: true, version: "0.1.0" }`
+- `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
+  - live order API 是否完整可用
+  - canonical signing 是否已启用
+  - Builder Program 是 `ready / partial / disabled`
+  - 当前还有哪些上线前 warning
 - `GET /version` → `{ version: "0.1.0" }`
 - `GET /portal/link/:token` → 返回账户连接页面，展示口令、有效期和绑定表单
 - `POST /portal/link/:token/complete` → 提交后把账户状态写入 `user_trading_accounts`，并把当前会话标记为 `linked`
@@ -94,9 +98,9 @@ curl https://<your-worker>.workers.dev/healthz
     - 有 builder tag + builder api key 时，会把 Builder Program attribution 一起塞进 payload，并落库到 `builder_attributions`
     - 没有配置就自动回退到模拟单
   - `/orders` → 返回最近订单记录；如果是 live 订单且配置了 order API，会额外刷新订单状态，并把新状态回写到本地 `trade_events`
-  - `/openorders` / `/openorders 2` → 返回远端未成交订单列表，支持基础分页，并在消息里带撤单按钮
-  - `/positions` / `/positions 2` / `/positions p2` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；会显示总敞口、已实现/未实现盈亏、分页游标和下一页 token
-  - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页
+  - `/openorders` / `/openorders 2` → 返回远端未成交订单列表，支持基础分页，并在消息里带撤单按钮；如果远端暂时失败但本地有缓存，会直接告诉你当前看到的是缓存
+  - `/positions` / `/positions 2` / `/positions p2` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；会显示总敞口、已实现/未实现盈亏、分页游标和下一页 token，并标记当前是实时数据还是缓存
+  - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页；如果是缓存回退也会直接提示
   - `/cancel <orderId>` → 对 live 订单发撤单请求；如果有 signing secret，撤单请求也会附带同一套 canonical signature headers
   - 其他文本 → 先记录对话，再返回 Phase 17 引导文案
 - Telegram 菜单 / callback 按钮：
@@ -105,8 +109,8 @@ curl https://<your-worker>.workers.dev/healthz
   - `怎么开始` → callback 后直接刷新成开始指引
   - `开始绑定` → callback 后创建绑定口令
   - `准备下单` → callback 后进入下单前确认说明；未绑定时会先引导绑定
-  - `上一页 / 下一页` → 现在可直接在 open orders / positions / fills 里原地翻页
-  - `撤单 <orderId>` → 现在可直接从 open orders 的 callback 按钮撤掉未成交单，并在撤单后原地刷新列表
+  - `上一页 / 下一页` → 现在可直接在 open orders / positions / fills 里原地翻页，并带简短 callback toast
+  - `撤单 <orderId>` → 现在可直接从 open orders 的 callback 按钮撤掉未成交单，并在撤单后原地刷新列表；callback 会顺手给出简短状态提示
 - 数据落库：
   - `users` 会 upsert Telegram 用户资料
   - `conversations` 会记录 user / assistant 双向对话
