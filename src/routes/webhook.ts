@@ -1,5 +1,5 @@
 /**
- * Telegram webhook route with persona lookup and Phase 13 onboarding/market behavior.
+ * Telegram webhook route with persona lookup and Phase 14 onboarding/market behavior.
  */
 
 import {
@@ -210,8 +210,8 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
   }
 
   if (data.startsWith('cancel_open_order:')) {
-    const orderId = data.replace('cancel_open_order:', '').trim();
-    return cancelOpenOrderCallbackReply(env, telegramUserId, botId, orderId);
+    const { orderId, page } = parseCancelOpenOrderCallback(data);
+    return cancelOpenOrderCallbackReply(env, telegramUserId, botId, orderId, page);
   }
 
   switch (data) {
@@ -276,7 +276,13 @@ async function cancelOrderReply(env: Env, telegramUserId: string, botId: string,
   };
 }
 
-async function cancelOpenOrderCallbackReply(env: Env, telegramUserId: string, botId: string, orderId: string) {
+async function cancelOpenOrderCallbackReply(
+  env: Env,
+  telegramUserId: string,
+  botId: string,
+  orderId: string,
+  page: number,
+) {
   const account = await getTradingAccount(env, telegramUserId, botId);
   if (!account) {
     return buildTradeEntryReply(false);
@@ -308,9 +314,8 @@ async function cancelOpenOrderCallbackReply(env: Env, telegramUserId: string, bo
     );
   }
 
-  return {
-    text: `订单 ${cancelled.orderId} 已取消，当前状态：${cancelled.status}。你可以继续翻 open orders，或者稍后再刷新确认列表。`,
-  };
+  const orders = await fetchLiveOpenOrders(env, telegramUserId, botId);
+  return buildOpenOrdersReply(orders, page);
 }
 
 async function persistEnrichedTradeEvents(
@@ -431,6 +436,19 @@ function parseCallbackPage(data: string): number {
     return 1;
   }
   return Math.floor(page);
+}
+
+function parseCancelOpenOrderCallback(data: string): { orderId: string; page: number } {
+  const payload = data.replace('cancel_open_order:', '').trim();
+  const parts = payload.split(':');
+  if (parts.length >= 2) {
+    const page = parseCallbackPage(`page:${parts.at(-1) ?? '1'}`);
+    return {
+      orderId: parts.slice(0, -1).join(':'),
+      page,
+    };
+  }
+  return { orderId: payload, page: 1 };
 }
 
 function safeParseJson(value: string | null): unknown {

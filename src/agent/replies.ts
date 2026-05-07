@@ -1,5 +1,5 @@
 /**
- * Phase 13 reply builders.
+ * Phase 14 reply builders.
  */
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
@@ -201,7 +201,7 @@ export function buildOpenOrdersReply(orders: RemoteOpenOrder[], page = 1, pageSi
     text: [`当前 ${orders.length} 条未成交订单：`, `第 ${currentPage} 页 / 共 ${totalPages} 页`, ...lines].join('\n'),
     replyMarkup: {
       inline_keyboard: [
-        ...buildOpenOrderActionRows(items),
+        ...buildOpenOrderActionRows(items, currentPage),
         ...buildPaginationRows('openorders_page', currentPage, totalPages),
         ...buildMainMenuMarkup().inline_keyboard,
       ],
@@ -386,7 +386,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 13 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也能直接点分页和撤单按钮继续走。',
+    text: '我先记下了。现在 Phase 14 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也能直接点分页、撤单，并在撤单后原地刷新列表。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -451,10 +451,10 @@ function buildPaginationRows(prefix: string, currentPage: number, totalPages: nu
   return row.length > 0 ? [row] : [];
 }
 
-function buildOpenOrderActionRows(orders: RemoteOpenOrder[]): TelegramMenuMarkup['inline_keyboard'] {
+function buildOpenOrderActionRows(orders: RemoteOpenOrder[], page: number): TelegramMenuMarkup['inline_keyboard'] {
   return orders.map((order) => ([{
     text: `撤单 ${shortOrderId(order.orderId)}`,
-    callback_data: `cancel_open_order:${order.orderId}`,
+    callback_data: `cancel_open_order:${order.orderId}:${page}`,
   }]));
 }
 
