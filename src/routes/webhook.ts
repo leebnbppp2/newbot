@@ -1,5 +1,5 @@
 /**
- * Telegram webhook route with persona lookup and Phase 14 onboarding/market behavior.
+ * Telegram webhook route with persona lookup and Phase 15 onboarding/market behavior.
  */
 
 import {
@@ -421,12 +421,16 @@ function normalizeOutcome(value: string): string | null {
 
 function parseCommandPage(text: string): number {
   const parts = text.trim().split(/\s+/);
-  const last = parts.at(-1);
+  const last = (parts.at(-1) ?? '').trim().toLowerCase();
   const page = Number(last);
-  if (!Number.isFinite(page) || page < 1) {
-    return 1;
+  if (Number.isFinite(page) && page >= 1) {
+    return Math.floor(page);
   }
-  return Math.floor(page);
+  const tokenMatch = last.match(/^(?:p|page:)(\d+)$/i);
+  if (tokenMatch) {
+    return Number(tokenMatch[1]);
+  }
+  return 1;
 }
 
 function parseCallbackPage(data: string): number {

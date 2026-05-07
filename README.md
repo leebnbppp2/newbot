@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 14：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 15：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -13,6 +13,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - portfolio 数据缓存 / 分页 / 浮盈亏展示
 - callback 翻页 + open orders 按钮撤单
 - callback 撤单后原地刷新 open orders 当前页
+- positions 已实现/未实现盈亏拆分 + page token 解析
 
 ## 5 步部署
 
@@ -37,7 +38,7 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 ```
 
-如果你要启用 Phase 14 的 live order/portfolio request，还可以额外提供：
+如果你要启用 Phase 15 的 live order/portfolio request，还可以额外提供：
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_ORDER_API_KEY`
 - `POLYMARKET_ORDER_SIGNING_SECRET`
@@ -61,7 +62,7 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 14 行为
+## 当前 Phase 15 行为
 
 - `GET /healthz` → `{ ok: true, version: "0.1.0" }`
 - `GET /version` → `{ version: "0.1.0" }`
@@ -83,10 +84,10 @@ curl https://<your-worker>.workers.dev/healthz
     - 没有配置就自动回退到模拟单
   - `/orders` → 返回最近订单记录；如果是 live 订单且配置了 order API，会额外刷新订单状态，并把新状态回写到本地 `trade_events`
   - `/openorders` / `/openorders 2` → 返回远端未成交订单列表，支持基础分页，并在消息里带撤单按钮
-  - `/positions` / `/positions 2` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；会显示总敞口、总浮动盈亏和分页信息
+  - `/positions` / `/positions 2` / `/positions p2` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；会显示总敞口、已实现/未实现盈亏、分页游标和下一页 token
   - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页
   - `/cancel <orderId>` → 对 live 订单发撤单请求，并把取消后的状态回写到本地 `trade_events`
-  - 其他文本 → 先记录对话，再返回 Phase 14 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 15 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态

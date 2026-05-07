@@ -41,6 +41,10 @@ type CacheRow = {
   expires_at: string;
 };
 
+type ReplyMarkup = {
+  inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+};
+
 class FakeD1 {
   tradingAccounts = new Map<string, TradingAccountRow>();
 
@@ -762,8 +766,9 @@ describe('handleTelegramWebhook phase 6', () => {
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('当前 2 条持仓');
     expect(payload.text).toContain('总敞口：104 USDC');
-    expect(payload.text).toContain('总浮动：+$6.24');
-    expect(payload.text).toContain('浮动');
+    expect(payload.text).toContain('已实现：+$0.00');
+    expect(payload.text).toContain('未实现：+$6.24');
+    expect(payload.text).toContain('未实现');
     expect(payload.text).toContain('btc-break-120k-2026');
   });
 
@@ -806,7 +811,9 @@ describe('handleTelegramWebhook phase 6', () => {
     };
     expect(payload.text).toContain('第 2 页 / 共 2 页');
     expect(payload.text).toContain('总敞口：116 USDC');
-    expect(payload.text).toContain('总浮动：+$6.72');
+    expect(payload.text).toContain('已实现：+$0.00');
+    expect(payload.text).toContain('未实现：+$6.72');
+    expect(payload.text).toContain('分页游标：p2');
     expect(payload.text).toContain('sol-ath');
     expect(payload.text).not.toContain('btc-break-120k-2026');
     expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
@@ -906,6 +913,55 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, init] = fetchMock.mock.calls[3] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('当前 1 条未成交订单');
+  });
+
+  it('supports page-token style positions command and shows realized/unrealized pnl split', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === 'https://orders.example.com/portfolio/positions?bot_id=crypto_zh&telegram_user_id=1001') {
+        return new Response(JSON.stringify({
+          positions: [
+            { marketSlug: 'btc-break-120k-2026', outcome: 'Yes', sizeUsdc: 80, avgPrice: 0.61, currentPrice: 0.7, realizedPnl: 3 },
+            { marketSlug: 'eth-etf-inflows', outcome: 'No', sizeUsdc: 24, avgPrice: 0.42, currentPrice: 0.38, realizedPnl: -1 },
+            { marketSlug: 'sol-ath', outcome: 'Yes', sizeUsdc: 12, avgPrice: 0.51, currentPrice: 0.55, realizedPnl: 0.5 },
+          ],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/positions p2'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as {
+      text: string;
+      reply_markup?: ReplyMarkup;
+    };
+    expect(payload.text).toContain('第 2 页 / 共 2 页');
+    expect(payload.text).toContain('已实现：+$2.50');
+    expect(payload.text).toContain('未实现：+$6.72');
+    expect(payload.text).toContain('分页游标：p2');
+    expect(payload.text).toContain('sol-ath');
+    expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ callback_data: 'positions_page:1' }),
+      ]),
+    );
   });
 
   it('returns paginated recent fills from the remote portfolio API', async () => {

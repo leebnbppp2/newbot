@@ -1,5 +1,5 @@
 /**
- * Phase 14 reply builders.
+ * Phase 15 reply builders.
  */
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
@@ -41,6 +41,8 @@ export interface RemotePosition {
   sizeUsdc: number;
   avgPrice?: number;
   currentPrice?: number;
+  realizedPnl?: number;
+  unrealizedPnl?: number;
 }
 
 export interface RemoteFill {
@@ -237,17 +239,23 @@ export function buildRemotePositionsReply(positions: RemotePosition[], page = 1,
 
   const { items, totalPages, currentPage } = paginateItems(positions, page, pageSize);
   const totalExposure = positions.reduce((sum, position) => sum + position.sizeUsdc, 0);
-  const totalPnl = positions.reduce((sum, position) => {
-    if (typeof position.avgPrice !== 'number' || typeof position.currentPrice !== 'number') {
-      return sum;
-    }
-    return sum + ((position.currentPrice - position.avgPrice) * position.sizeUsdc);
-  }, 0);
+  const totalRealizedPnl = positions.reduce((sum, position) => sum + resolveRealizedPnl(position), 0);
+  const totalUnrealizedPnl = positions.reduce((sum, position) => sum + resolveUnrealizedPnl(position), 0);
   const lines = items.map((position, index) => {
-    const pnlText = typeof position.avgPrice === 'number' && typeof position.currentPrice === 'number'
-      ? ` · 浮动 ${formatSignedUsd((position.currentPrice - position.avgPrice) * position.sizeUsdc)}`
-      : '';
-    return `${index + 1}. ${position.marketSlug}\n   ${position.outcome} · ${position.sizeUsdc} USDC${typeof position.avgPrice === 'number' ? ` · 均价 ${position.avgPrice}` : ''}${pnlText}`;
+    const unrealizedPnl = resolveUnrealizedPnl(position);
+    const realizedPnl = resolveRealizedPnl(position);
+    const pnlParts: string[] = [];
+    if (typeof position.avgPrice === 'number') {
+      pnlParts.push(`均价 ${position.avgPrice}`);
+    }
+    if (unrealizedPnl !== 0 || typeof position.currentPrice === 'number') {
+      pnlParts.push(`未实现 ${formatSignedUsd(unrealizedPnl)}`);
+    }
+    if (realizedPnl !== 0) {
+      pnlParts.push(`已实现 ${formatSignedUsd(realizedPnl)}`);
+    }
+    const tail = pnlParts.length > 0 ? ` · ${pnlParts.join(' · ')}` : '';
+    return `${index + 1}. ${position.marketSlug}\n   ${position.outcome} · ${position.sizeUsdc} USDC${tail}`;
   });
 
   return {
@@ -255,7 +263,10 @@ export function buildRemotePositionsReply(positions: RemotePosition[], page = 1,
       `当前 ${positions.length} 条持仓：`,
       `第 ${currentPage} 页 / 共 ${totalPages} 页`,
       `总敞口：${formatUsdc(totalExposure)}`,
-      `总浮动：${formatSignedUsd(totalPnl)}`,
+      `已实现：${formatSignedUsd(totalRealizedPnl)}`,
+      `未实现：${formatSignedUsd(totalUnrealizedPnl)}`,
+      `分页游标：p${currentPage}`,
+      ...(currentPage < totalPages ? [`下一页 token：p${currentPage + 1}`] : []),
       ...lines,
     ].join('\n'),
     replyMarkup: {
@@ -386,7 +397,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 14 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也能直接点分页、撤单，并在撤单后原地刷新列表。',
+    text: '我先记下了。现在 Phase 15 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也能直接点分页、撤单，并看到已实现/未实现盈亏和分页 token。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -470,6 +481,20 @@ function formatUsdc(value: number): string {
     return `${value} USDC`;
   }
   return `${value.toFixed(2)} USDC`;
+}
+
+function resolveRealizedPnl(position: RemotePosition): number {
+  return typeof position.realizedPnl === 'number' ? position.realizedPnl : 0;
+}
+
+function resolveUnrealizedPnl(position: RemotePosition): number {
+  if (typeof position.unrealizedPnl === 'number') {
+    return position.unrealizedPnl;
+  }
+  if (typeof position.avgPrice === 'number' && typeof position.currentPrice === 'number') {
+    return (position.currentPrice - position.avgPrice) * position.sizeUsdc;
+  }
+  return 0;
 }
 
 function formatSignedUsd(value: number): string {
