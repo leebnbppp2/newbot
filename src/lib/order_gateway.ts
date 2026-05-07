@@ -1,8 +1,8 @@
 /**
- * Phase 10 order gateway: auth-mode aware signing prep + live status refresh + cancel flow.
+ * Phase 11 order gateway: auth-mode aware signing prep + live lifecycle + portfolio reads.
  */
 
-import type { MarketItem } from '../agent/replies';
+import type { RemoteFill, RemoteOpenOrder, RemotePosition, MarketItem } from '../agent/replies';
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
 import type { Env } from '../types';
@@ -35,10 +35,7 @@ interface LiveOrderConfig {
   builderTag: string | null;
 }
 
-export async function executeBuyOrder(
-  env: Env,
-  input: ExecuteBuyOrderInput,
-): Promise<ExecuteBuyOrderResult> {
+export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Promise<ExecuteBuyOrderResult> {
   const liveConfig = getLiveOrderConfig(env);
   if (!liveConfig) {
     return {
@@ -106,11 +103,7 @@ export async function enrichTradeEventsWithLiveStatus(env: Env, events: TradeEve
   return updated;
 }
 
-export async function cancelLiveOrder(
-  env: Env,
-  orderId: string,
-  authMode: string,
-): Promise<CancelOrderResult | null> {
+export async function cancelLiveOrder(env: Env, orderId: string, authMode: string): Promise<CancelOrderResult | null> {
   const liveConfig = getLiveOrderConfig(env);
   if (!liveConfig) {
     return null;
@@ -140,6 +133,54 @@ export async function cancelLiveOrder(
     orderId: payload.orderId ?? orderId,
     detail: payload,
   };
+}
+
+export async function fetchLiveOpenOrders(env: Env, telegramUserId: string, botId: string): Promise<RemoteOpenOrder[]> {
+  const liveConfig = getLiveOrderConfig(env);
+  if (!liveConfig) {
+    return [];
+  }
+  const response = await fetch(`${liveConfig.baseUrl}/orders/open?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${liveConfig.apiKey}` },
+  });
+  if (!response.ok) {
+    return [];
+  }
+  const payload = (await safeJson(response)) as { orders?: RemoteOpenOrder[] };
+  return payload.orders ?? [];
+}
+
+export async function fetchRemotePositions(env: Env, telegramUserId: string, botId: string): Promise<RemotePosition[]> {
+  const liveConfig = getLiveOrderConfig(env);
+  if (!liveConfig) {
+    return [];
+  }
+  const response = await fetch(`${liveConfig.baseUrl}/portfolio/positions?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${liveConfig.apiKey}` },
+  });
+  if (!response.ok) {
+    return [];
+  }
+  const payload = (await safeJson(response)) as { positions?: RemotePosition[] };
+  return payload.positions ?? [];
+}
+
+export async function fetchRemoteFills(env: Env, telegramUserId: string, botId: string): Promise<RemoteFill[]> {
+  const liveConfig = getLiveOrderConfig(env);
+  if (!liveConfig) {
+    return [];
+  }
+  const response = await fetch(`${liveConfig.baseUrl}/portfolio/fills?bot_id=${encodeURIComponent(botId)}&telegram_user_id=${encodeURIComponent(telegramUserId)}`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${liveConfig.apiKey}` },
+  });
+  if (!response.ok) {
+    return [];
+  }
+  const payload = (await safeJson(response)) as { fills?: RemoteFill[] };
+  return payload.fills ?? [];
 }
 
 function getLiveOrderConfig(env: Env): LiveOrderConfig | null {
@@ -181,11 +222,7 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
   };
 }
 
-async function buildSignedHeaders(
-  config: LiveOrderConfig,
-  payload: Record<string, unknown>,
-  authMode: string,
-): Promise<Record<string, string>> {
+async function buildSignedHeaders(config: LiveOrderConfig, payload: Record<string, unknown>, authMode: string): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     authorization: `Bearer ${config.apiKey}`,
@@ -202,27 +239,16 @@ async function buildSignedHeaders(
 
 async function signPayload(payload: Record<string, unknown>, signingSecret: string, authMode: string): Promise<string> {
   const encodedSecret = new TextEncoder().encode(`${authMode}:${signingSecret}`);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encodedSecret,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
+  const key = await crypto.subtle.importKey('raw', encodedSecret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const encodedPayload = new TextEncoder().encode(JSON.stringify(payload));
   const signature = await crypto.subtle.sign('HMAC', key, encodedPayload);
   return toHex(signature);
 }
 
-async function fetchLiveOrderStatus(
-  config: LiveOrderConfig,
-  orderId: string,
-): Promise<{ status: string; detail: Record<string, unknown> } | null> {
+async function fetchLiveOrderStatus(config: LiveOrderConfig, orderId: string): Promise<{ status: string; detail: Record<string, unknown> } | null> {
   const response = await fetch(`${config.baseUrl}/orders/${encodeURIComponent(orderId)}`, {
     method: 'GET',
-    headers: {
-      authorization: `Bearer ${config.apiKey}`,
-    },
+    headers: { authorization: `Bearer ${config.apiKey}` },
   });
   if (!response.ok) {
     return null;
@@ -235,22 +261,14 @@ async function fetchLiveOrderStatus(
 }
 
 function normalizeLiveStatus(status: string | undefined): string {
-  if (status === 'submitted') {
-    return 'live_submitted';
-  }
-  if (status === 'matched') {
-    return 'live_matched';
-  }
-  if (status === 'cancelled') {
-    return 'live_cancelled';
-  }
+  if (status === 'submitted') return 'live_submitted';
+  if (status === 'matched') return 'live_matched';
+  if (status === 'cancelled') return 'live_cancelled';
   return status ?? 'live_submitted';
 }
 
 function safeParseJson(value: string | null): unknown {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
   try {
     return JSON.parse(value);
   } catch {
@@ -259,9 +277,7 @@ function safeParseJson(value: string | null): unknown {
 }
 
 function toHex(input: ArrayBuffer): string {
-  return Array.from(new Uint8Array(input))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+  return Array.from(new Uint8Array(input)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 async function safeJson(response: Response): Promise<unknown> {

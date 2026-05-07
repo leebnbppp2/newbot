@@ -1,5 +1,5 @@
 /**
- * Simple Phase 6 reply builders.
+ * Phase 11 reply builders.
  */
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
@@ -25,6 +25,29 @@ export interface MarketItem {
   endDate?: string;
   slug?: string;
   outcomes?: MarketOutcome[];
+}
+
+export interface RemoteOpenOrder {
+  orderId: string;
+  marketSlug: string;
+  outcome: string;
+  amountUsdc: number;
+  status: string;
+}
+
+export interface RemotePosition {
+  marketSlug: string;
+  outcome: string;
+  sizeUsdc: number;
+  avgPrice?: number;
+}
+
+export interface RemoteFill {
+  marketSlug: string;
+  outcome: string;
+  amountUsdc: number;
+  price?: number;
+  side: string;
 }
 
 export function buildStartReply(): BotReply {
@@ -161,6 +184,23 @@ export function buildOrdersReply(events: TradeEventRow[]): BotReply {
   };
 }
 
+export function buildOpenOrdersReply(orders: RemoteOpenOrder[]): BotReply {
+  if (orders.length === 0) {
+    return {
+      text: '你这边暂时没有未成交订单。',
+      replyMarkup: buildMainMenuMarkup(),
+    };
+  }
+
+  const lines = orders.slice(0, 5).map((order, index) => (
+    `${index + 1}. ${order.marketSlug}\n   ${order.outcome} · ${order.amountUsdc} USDC · ${order.status} · ${order.orderId}`
+  ));
+  return {
+    text: [`当前 ${Math.min(orders.length, 5)} 条未成交订单：`, ...lines].join('\n'),
+    replyMarkup: buildMainMenuMarkup(),
+  };
+}
+
 export function buildPositionsReply(events: TradeEventRow[]): BotReply {
   if (events.length === 0) {
     return {
@@ -175,6 +215,42 @@ export function buildPositionsReply(events: TradeEventRow[]): BotReply {
 
   return {
     text: ['当前记录里的模拟仓位：', ...lines].join('\n'),
+    replyMarkup: buildMainMenuMarkup(),
+  };
+}
+
+export function buildRemotePositionsReply(positions: RemotePosition[]): BotReply {
+  if (positions.length === 0) {
+    return {
+      text: '你这边暂时没有持仓。',
+      replyMarkup: buildMainMenuMarkup(),
+    };
+  }
+
+  const lines = positions.slice(0, 5).map((position, index) => (
+    `${index + 1}. ${position.marketSlug}\n   ${position.outcome} · ${position.sizeUsdc} USDC${typeof position.avgPrice === 'number' ? ` · 均价 ${position.avgPrice}` : ''}`
+  ));
+
+  return {
+    text: [`当前 ${Math.min(positions.length, 5)} 条持仓：`, ...lines].join('\n'),
+    replyMarkup: buildMainMenuMarkup(),
+  };
+}
+
+export function buildFillsReply(fills: RemoteFill[]): BotReply {
+  if (fills.length === 0) {
+    return {
+      text: '最近还没有成交记录。',
+      replyMarkup: buildMainMenuMarkup(),
+    };
+  }
+
+  const lines = fills.slice(0, 5).map((fill, index) => (
+    `${index + 1}. ${fill.marketSlug}\n   ${fill.side} · ${fill.outcome} · ${fill.amountUsdc} USDC${typeof fill.price === 'number' ? ` · 成交价 ${fill.price}` : ''}`
+  ));
+
+  return {
+    text: [`最近 ${Math.min(fills.length, 5)} 条成交记录：`, ...lines].join('\n'),
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -274,7 +350,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 6 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/positions，也可以直接点菜单继续走。',
+    text: '我先记下了。现在 Phase 11 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也可以直接点菜单继续走。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }

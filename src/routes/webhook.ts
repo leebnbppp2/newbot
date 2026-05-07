@@ -1,15 +1,18 @@
 /**
- * Telegram webhook route with persona lookup and Phase 6 onboarding/market behavior.
+ * Telegram webhook route with persona lookup and Phase 11 onboarding/market behavior.
  */
 
 import {
   buildAccountReply,
   buildBuyConfirmReply,
   buildDefaultReply,
+  buildFillsReply,
   buildGettingStartedReply,
   buildLinkAccountReply,
+  buildOpenOrdersReply,
   buildOrdersReply,
   buildPositionsReply,
+  buildRemotePositionsReply,
   buildStartReply,
   buildSubmittedBuyReply,
   buildTradeEntryReply,
@@ -24,7 +27,14 @@ import {
 } from '../db/trade_events';
 import { getTradingAccount, getTradingAccountStatus, upsertTelegramUser } from '../db/users';
 import { findBestMarket, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
-import { cancelLiveOrder, enrichTradeEventsWithLiveStatus, executeBuyOrder } from '../lib/order_gateway';
+import {
+  cancelLiveOrder,
+  enrichTradeEventsWithLiveStatus,
+  executeBuyOrder,
+  fetchLiveOpenOrders,
+  fetchRemoteFills,
+  fetchRemotePositions,
+} from '../lib/order_gateway';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
 import type { Env, TelegramCallbackQuery, TelegramUpdate } from '../types';
@@ -99,12 +109,7 @@ async function handleCallbackQuery(
   await editTelegramMessage(env, secretName, chatId, messageId, reply);
 }
 
-async function resolveReply(
-  env: Env,
-  botId: string,
-  telegramUserId: string,
-  text: string,
-) {
+async function resolveReply(env: Env, botId: string, telegramUserId: string, text: string) {
   const normalized = text.toLowerCase();
 
   if (normalized === '/start' || normalized === '/menu') {
@@ -131,16 +136,30 @@ async function resolveReply(
     return buildOrdersReply(enrichedEvents);
   }
 
+  if (normalized === '/openorders') {
+    const orders = await fetchLiveOpenOrders(env, telegramUserId, botId);
+    return buildOpenOrdersReply(orders);
+  }
+
+  if (normalized === '/positions') {
+    const remotePositions = await fetchRemotePositions(env, telegramUserId, botId);
+    if (remotePositions.length > 0) {
+      return buildRemotePositionsReply(remotePositions);
+    }
+    const events = await listRecentTradeEvents(env, telegramUserId, botId);
+    return buildPositionsReply(events);
+  }
+
+  if (normalized === '/fills') {
+    const fills = await fetchRemoteFills(env, telegramUserId, botId);
+    return buildFillsReply(fills);
+  }
+
   if (normalized.startsWith('/cancel ')) {
     const orderId = normalized.replace(/^\/cancel\s+/, '').trim();
     if (orderId.length > 0) {
       return cancelOrderReply(env, telegramUserId, botId, orderId);
     }
-  }
-
-  if (normalized === '/positions') {
-    const events = await listRecentTradeEvents(env, telegramUserId, botId);
-    return buildPositionsReply(events);
   }
 
   if (normalized.startsWith('/find ') || normalized.startsWith('/search ')) {
@@ -164,12 +183,7 @@ async function resolveReply(
   return buildDefaultReply();
 }
 
-async function resolveCallbackReply(
-  env: Env,
-  botId: string,
-  telegramUserId: string,
-  data: string,
-) {
+async function resolveCallbackReply(env: Env, botId: string, telegramUserId: string, data: string) {
   switch (data) {
     case 'market_overview':
       return getMarketOverviewReply(env);
@@ -328,19 +342,13 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
 
 function normalizeOutcome(value: string): string | null {
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'yes') {
-    return 'Yes';
-  }
-  if (normalized === 'no') {
-    return 'No';
-  }
+  if (normalized === 'yes') return 'Yes';
+  if (normalized === 'no') return 'No';
   return null;
 }
 
 function safeParseJson(value: string | null): unknown {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
   try {
     return JSON.parse(value);
   } catch {
