@@ -424,7 +424,14 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 19 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health，也会在 live 请求里附带更正式的签名头、signature envelope，并在持仓/订单回退到缓存时直接告诉你。',
+    text: '我先记下了。现在 Phase 20 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health；如果配置了操作者白名单，系统状态只给操作者看。',
+    replyMarkup: buildMainMenuMarkup(),
+  };
+}
+
+export function buildOperatorOnlyReply(): BotReply {
+  return {
+    text: '这个系统状态入口只给配置过的操作者使用。你可以继续用 /market、/account 或 /orders 查看自己的交易信息。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }

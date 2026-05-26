@@ -9,6 +9,7 @@ import {
   buildFillsReply,
   buildGettingStartedReply,
   buildHealthReply,
+  buildOperatorOnlyReply,
   buildLinkAccountReply,
   buildOpenOrdersReply,
   buildOrdersReply,
@@ -49,6 +50,19 @@ interface CallbackReplyResult {
 }
 
 const TELEGRAM_SECRET_HEADER = 'x-telegram-bot-api-secret-token';
+
+function isTelegramOperator(env: Env, telegramUserId: string): boolean {
+  const raw = env.NEWBOT_OPERATOR_TELEGRAM_IDS?.trim();
+  if (!raw) {
+    return true;
+  }
+
+  return raw
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .includes(telegramUserId);
+}
 
 export async function handleTelegramWebhook(request: Request, env: Env, personaId: string): Promise<Response> {
   if (request.method !== 'POST') {
@@ -131,6 +145,9 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
   }
 
   if (normalized === '/health' || normalized === '/ops' || normalized === '/readiness') {
+    if (!isTelegramOperator(env, telegramUserId)) {
+      return buildOperatorOnlyReply();
+    }
     return buildHealthReply(getOrderGatewayReadiness(env));
   }
 
@@ -247,6 +264,12 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
       return { reply: buildAccountReply(account), callbackToast: { text: '已刷新账户状态', showAlert: false } };
     }
     case 'ops_health':
+      if (!isTelegramOperator(env, telegramUserId)) {
+        return {
+          reply: buildOperatorOnlyReply(),
+          callbackToast: { text: '只有配置过的操作者可以看系统状态', showAlert: true },
+        };
+      }
       return { reply: buildHealthReply(getOrderGatewayReadiness(env)), callbackToast: { text: '系统状态已刷新', showAlert: false } };
     case 'getting_started':
       return { reply: buildGettingStartedReply(), callbackToast: { text: '开始说明在这里', showAlert: false } };

@@ -229,7 +229,7 @@ function makeEnv(db: FakeD1, overrides: Partial<Env> = {}): Env {
   };
 }
 
-function makeMessageRequest(text: string) {
+function makeMessageRequest(text: string, telegramUserId = 1001) {
   return new Request('https://example.com/telegram/webhook/crypto_zh', {
     method: 'POST',
     headers: {
@@ -243,7 +243,7 @@ function makeMessageRequest(text: string) {
         text,
         chat: { id: 2001, type: 'private' },
         from: {
-          id: 1001,
+          id: telegramUserId,
           is_bot: false,
           first_name: 'Dora',
           last_name: 'Lee',
@@ -255,7 +255,7 @@ function makeMessageRequest(text: string) {
   });
 }
 
-function makeCallbackRequest(data: string) {
+function makeCallbackRequest(data: string, telegramUserId = 1001) {
   return new Request('https://example.com/telegram/webhook/crypto_zh', {
     method: 'POST',
     headers: {
@@ -268,7 +268,7 @@ function makeCallbackRequest(data: string) {
         id: 'cbq-phase13',
         data,
         from: {
-          id: 1001,
+          id: telegramUserId,
           is_bot: false,
           first_name: 'Dora',
           last_name: 'Lee',
@@ -1121,6 +1121,65 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(payload.text).toContain('Canonical signing：已启用');
     expect(payload.text).toContain('Builder attribution：ready');
     expect(payload.text).toContain('暂时没有配置告警');
+  });
+
+  it('limits Telegram readiness commands to configured operators', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db, {
+      NEWBOT_OPERATOR_TELEGRAM_IDS: '9001,9002',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/health', 1001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('这个系统状态入口只给配置过的操作者使用');
+    expect(payload.text).not.toContain('Live order API：已配置');
+  });
+
+  it('allows configured operators to open Telegram readiness commands', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db, {
+      NEWBOT_OPERATOR_TELEGRAM_IDS: '9001, 9002',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/ops', 9002), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('NewBot 当前状态');
+    expect(payload.text).toContain('Live order API：已配置');
+  });
+
+  it('shows an alert when non-operators tap the system status callback', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db, {
+      NEWBOT_OPERATOR_TELEGRAM_IDS: '9001',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('ops_health', 1001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const answerCall = fetchMock.mock.calls.find(([input]) => String(input).includes('answerCallbackQuery'));
+    expect(answerCall).toBeDefined();
+    const [, answerInit] = answerCall as [string, RequestInit];
+    expect(JSON.parse(String(answerInit.body))).toMatchObject({ text: '只有配置过的操作者可以看系统状态', show_alert: true });
+    const editCall = fetchMock.mock.calls.find(([input]) => String(input).includes('editMessageText'));
+    expect(editCall).toBeDefined();
+    const [, editInit] = editCall as [string, RequestInit];
+    const payload = JSON.parse(String(editInit.body)) as { text: string };
+    expect(payload.text).toContain('这个系统状态入口只给配置过的操作者使用');
   });
 
   it('lists recent simulated orders', async () => {

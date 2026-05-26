@@ -14,6 +14,7 @@ export interface Env {
   POLYMARKET_ORDER_SIGNING_SECRET?: string;
   POLYMARKET_BUILDER_TAG?: string;
   POLYMARKET_BUILDER_API_KEY?: string;
+  NEWBOT_OPERATOR_TELEGRAM_IDS?: string;
 }
 
 export interface TelegramUser {
