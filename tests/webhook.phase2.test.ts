@@ -266,6 +266,7 @@ describe('handleTelegramWebhook phase 4', () => {
     expect(payload.reply_markup?.inline_keyboard).toEqual([
       [{ text: '看市场', callback_data: 'market_overview' }],
       [{ text: '我的账户', callback_data: 'account_status' }],
+      [{ text: '系统状态', callback_data: 'ops_health' }],
       [{ text: '怎么开始', callback_data: 'getting_started' }],
     ]);
   });

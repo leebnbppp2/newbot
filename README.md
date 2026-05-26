@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 18：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 19：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -16,6 +16,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - positions 已实现/未实现盈亏拆分 + page token 解析
 - Builder Program attribution 落库与生效校验
 - 更正式的 canonical signature header / signature envelope
+- Telegram 内 `/health` / `/ops` / 系统状态按钮，直接查看 live API、签名和 Builder 配置 readiness
 
 ## 5 步部署
 
@@ -65,7 +66,7 @@ npm test
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 18 行为
+## 当前 Phase 19 行为
 
 - `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
   - live order API 是否完整可用
@@ -102,10 +103,12 @@ curl https://<your-worker>.workers.dev/healthz
   - `/positions` / `/positions 2` / `/positions p2` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；会显示总敞口、已实现/未实现盈亏、分页游标和下一页 token，并标记当前是实时数据还是缓存
   - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页；如果是缓存回退也会直接提示
   - `/cancel <orderId>` → 对 live 订单发撤单请求；如果有 signing secret，撤单请求也会附带同一套 canonical signature headers
-  - 其他文本 → 先记录对话，再返回 Phase 17 引导文案
+  - `/health` / `/ops` / `/readiness` → 在 Telegram 里直接查看 live order API、canonical signing、Builder attribution 和当前配置 warning
+  - 其他文本 → 先记录对话，再返回 Phase 19 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
+  - `系统状态` → callback 后原地刷新 readiness，并给出简短“系统状态已刷新”提示
   - `怎么开始` → callback 后直接刷新成开始指引
   - `开始绑定` → callback 后创建绑定口令
   - `准备下单` → callback 后进入下单前确认说明；未绑定时会先引导绑定

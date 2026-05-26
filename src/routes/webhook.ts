@@ -8,6 +8,7 @@ import {
   buildDefaultReply,
   buildFillsReply,
   buildGettingStartedReply,
+  buildHealthReply,
   buildLinkAccountReply,
   buildOpenOrdersReply,
   buildOrdersReply,
@@ -35,6 +36,7 @@ import {
   fetchLiveOpenOrders,
   fetchRemoteFills,
   fetchRemotePositions,
+  getOrderGatewayReadiness,
 } from '../lib/order_gateway';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import type { CallbackToast } from '../lib/telegram';
@@ -126,6 +128,10 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
   if (normalized === '/account' || normalized === '/status') {
     const account = await getTradingAccount(env, telegramUserId, botId);
     return buildAccountReply(account);
+  }
+
+  if (normalized === '/health' || normalized === '/ops' || normalized === '/readiness') {
+    return buildHealthReply(getOrderGatewayReadiness(env));
   }
 
   if (normalized === '/link') {
@@ -240,6 +246,8 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
       const account = await getTradingAccount(env, telegramUserId, botId);
       return { reply: buildAccountReply(account), callbackToast: { text: '已刷新账户状态', showAlert: false } };
     }
+    case 'ops_health':
+      return { reply: buildHealthReply(getOrderGatewayReadiness(env)), callbackToast: { text: '系统状态已刷新', showAlert: false } };
     case 'getting_started':
       return { reply: buildGettingStartedReply(), callbackToast: { text: '开始说明在这里', showAlert: false } };
     case 'start_link_account':

@@ -1069,6 +1069,60 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(payload.text).not.toContain('btc-break-120k-2026');
   });
 
+  it('shows live readiness from /health in Telegram', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_BUILDER_TAG: 'newbot-builder',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/health'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string; reply_markup?: ReplyMarkup };
+    expect(payload.text).toContain('NewBot 当前状态');
+    expect(payload.text).toContain('Live order API：已配置');
+    expect(payload.text).toContain('Canonical signing：未启用');
+    expect(payload.text).toContain('Builder attribution：partial');
+    expect(payload.text).toContain('signing secret 还没配置');
+    expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ callback_data: 'ops_health' }),
+      ]),
+    );
+  });
+
+  it('refreshes readiness from the system status callback', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+      POLYMARKET_BUILDER_TAG: 'newbot-builder',
+      POLYMARKET_BUILDER_API_KEY: 'builder-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('ops_health'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const answerCall = fetchMock.mock.calls.find(([input]) => String(input).includes('answerCallbackQuery'));
+    expect(answerCall).toBeDefined();
+    const [, answerInit] = answerCall as [string, RequestInit];
+    expect(JSON.parse(String(answerInit.body))).toMatchObject({ text: '系统状态已刷新', show_alert: false });
+    const editCall = fetchMock.mock.calls.find(([input]) => String(input).includes('editMessageText'));
+    expect(editCall).toBeDefined();
+    const [, editInit] = editCall as [string, RequestInit];
+    const payload = JSON.parse(String(editInit.body)) as { text: string };
+    expect(payload.text).toContain('Live order API：已配置');
+    expect(payload.text).toContain('Canonical signing：已启用');
+    expect(payload.text).toContain('Builder attribution：ready');
+    expect(payload.text).toContain('暂时没有配置告警');
+  });
+
   it('lists recent simulated orders', async () => {
     const db = new FakeD1();
     db.tradingAccounts.set('1001:crypto_zh', {

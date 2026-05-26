@@ -3,7 +3,7 @@
  */
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
-import type { RemoteDataSource } from '../lib/order_gateway';
+import type { OrderGatewayReadiness, RemoteDataSource } from '../lib/order_gateway';
 
 export interface TelegramMenuMarkup {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
@@ -424,7 +424,25 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 18 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel，也会在 live 请求里附带更正式的签名头、signature envelope，并在持仓/订单回退到缓存时直接告诉你。',
+    text: '我先记下了。现在 Phase 19 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health，也会在 live 请求里附带更正式的签名头、signature envelope，并在持仓/订单回退到缓存时直接告诉你。',
+    replyMarkup: buildMainMenuMarkup(),
+  };
+}
+
+export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
+  const warningLines = readiness.warnings.length > 0
+    ? readiness.warnings.map((warning) => `- ${warning}`)
+    : ['暂时没有配置告警'];
+
+  return {
+    text: [
+      'NewBot 当前状态：',
+      `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
+      `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
+      `Builder attribution：${readiness.builderAttribution}`,
+      '配置提示：',
+      ...warningLines,
+    ].join('\n'),
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -434,6 +452,7 @@ export function buildMainMenuMarkup(): TelegramMenuMarkup {
     inline_keyboard: [
       [{ text: '看市场', callback_data: 'market_overview' }],
       [{ text: '我的账户', callback_data: 'account_status' }],
+      [{ text: '系统状态', callback_data: 'ops_health' }],
       [{ text: '怎么开始', callback_data: 'getting_started' }],
     ],
   };
