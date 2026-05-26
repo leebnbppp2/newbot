@@ -424,7 +424,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 21 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health；上线后可以用 npm run smoke 做一遍只读检查。',
+    text: '我先记下了。现在 Phase 22 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；上线后可以用 npm run smoke 做一遍只读检查，再按灰度 runbook 放量。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -450,7 +450,34 @@ export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
       '配置提示：',
       ...warningLines,
     ].join('\n'),
-    replyMarkup: buildMainMenuMarkup(),
+    replyMarkup: buildOperatorMenuMarkup(),
+  };
+}
+
+export function buildRunbookReply(readiness: OrderGatewayReadiness): BotReply {
+  const blockers = readiness.warnings.length > 0
+    ? readiness.warnings.map((warning) => `- ${warning}`)
+    : ['暂时没有阻断项'];
+
+  return {
+    text: [
+      'Phase 22 灰度 runbook：',
+      `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
+      `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
+      `Builder attribution：${readiness.builderAttribution}`,
+      '上线前：',
+      '- npm run smoke -- <worker-url>',
+      '- /health 确认没有阻断项',
+      '放量顺序：',
+      '- 1% / allowlist：只放内部操作者和少量测试用户',
+      '- 10%：观察 webhook、订单状态同步和撤单回路',
+      '- 100%：确认 30 分钟没有新增告警再全量',
+      '回滚条件：',
+      '- smoke 失败、webhook 401 防护异常、live order API/signing 缺失，先停放量',
+      '当前阻断项：',
+      ...blockers,
+    ].join('\n'),
+    replyMarkup: buildOperatorMenuMarkup(),
   };
 }
 
@@ -461,6 +488,17 @@ export function buildMainMenuMarkup(): TelegramMenuMarkup {
       [{ text: '我的账户', callback_data: 'account_status' }],
       [{ text: '系统状态', callback_data: 'ops_health' }],
       [{ text: '怎么开始', callback_data: 'getting_started' }],
+    ],
+  };
+}
+
+function buildOperatorMenuMarkup(): TelegramMenuMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: '系统状态', callback_data: 'ops_health' }],
+      [{ text: '灰度 Runbook', callback_data: 'ops_runbook' }],
+      [{ text: '看市场', callback_data: 'market_overview' }],
+      [{ text: '我的账户', callback_data: 'account_status' }],
     ],
   };
 }

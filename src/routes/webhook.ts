@@ -15,6 +15,7 @@ import {
   buildOrdersReply,
   buildPositionsReply,
   buildRemotePositionsReply,
+  buildRunbookReply,
   buildStartReply,
   buildSubmittedBuyReply,
   buildTradeEntryReply,
@@ -151,6 +152,13 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     return buildHealthReply(getOrderGatewayReadiness(env));
   }
 
+  if (normalized === '/runbook' || normalized === '/rollout') {
+    if (!isTelegramOperator(env, telegramUserId)) {
+      return buildOperatorOnlyReply();
+    }
+    return buildRunbookReply(getOrderGatewayReadiness(env));
+  }
+
   if (normalized === '/link') {
     return createLinkAccountReply(env, telegramUserId, botId);
   }
@@ -271,6 +279,14 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
         };
       }
       return { reply: buildHealthReply(getOrderGatewayReadiness(env)), callbackToast: { text: '系统状态已刷新', showAlert: false } };
+    case 'ops_runbook':
+      if (!isTelegramOperator(env, telegramUserId)) {
+        return {
+          reply: buildOperatorOnlyReply(),
+          callbackToast: { text: '只有配置过的操作者可以看灰度 runbook', showAlert: true },
+        };
+      }
+      return { reply: buildRunbookReply(getOrderGatewayReadiness(env)), callbackToast: { text: '灰度 runbook 已刷新', showAlert: false } };
     case 'getting_started':
       return { reply: buildGettingStartedReply(), callbackToast: { text: '开始说明在这里', showAlert: false } };
     case 'start_link_account':
