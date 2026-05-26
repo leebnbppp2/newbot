@@ -146,11 +146,12 @@ export function buildSubmittedBuyReply(
   orderId: string,
   mode: 'live' | 'simulated',
   status: string,
+  note?: string,
 ): BotReply {
   const title = mode === 'live' ? '真实下单请求已经发出。' : '模拟下单已经记录。';
-  const tail = mode === 'live'
+  const tail = note ?? (mode === 'live'
     ? '你现在可以发 /orders 看状态，后面我再把真实成交和回执细节接进来。'
-    : '还没接入真实下单 API，所以这笔先按模拟单记录。你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。';
+    : '还没接入真实下单 API，所以这笔先按模拟单记录。你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。');
   return {
     text: [
       title,
@@ -424,7 +425,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 22 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；上线后可以用 npm run smoke 做一遍只读检查，再按灰度 runbook 放量。',
+    text: '我先记下了。现在 Phase 23 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；live 交易可以用用户 allowlist 灰度开放。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -447,6 +448,7 @@ export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,
+      `Live trading allowlist：${readiness.liveTradingAllowlist ? '已启用' : '未启用'}`,
       '配置提示：',
       ...warningLines,
     ].join('\n'),
@@ -465,6 +467,7 @@ export function buildRunbookReply(readiness: OrderGatewayReadiness): BotReply {
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,
+      `Live trading allowlist：${readiness.liveTradingAllowlist ? '已启用' : '未启用'}`,
       '上线前：',
       '- npm run smoke -- <worker-url>',
       '- /health 确认没有阻断项',

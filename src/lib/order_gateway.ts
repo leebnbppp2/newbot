@@ -61,6 +61,7 @@ export interface OrderGatewayReadiness {
   liveOrderApi: boolean;
   signing: boolean;
   builderAttribution: 'ready' | 'partial' | 'disabled';
+  liveTradingAllowlist: boolean;
   warnings: string[];
 }
 
@@ -243,6 +244,7 @@ export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
   const signingSecret = env.POLYMARKET_ORDER_SIGNING_SECRET?.trim();
   const builderTag = env.POLYMARKET_BUILDER_TAG?.trim();
   const builderApiKey = env.POLYMARKET_BUILDER_API_KEY?.trim();
+  const liveTradingAllowlist = env.NEWBOT_LIVE_TRADING_TELEGRAM_IDS?.trim();
   const warnings: string[] = [];
 
   if (!baseUrl || !apiKey) {
@@ -263,6 +265,7 @@ export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
     liveOrderApi: Boolean(baseUrl && apiKey),
     signing: Boolean(baseUrl && apiKey && signingSecret),
     builderAttribution,
+    liveTradingAllowlist: Boolean(liveTradingAllowlist),
     warnings,
   };
 }

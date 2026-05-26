@@ -15,6 +15,7 @@ export function handleHealthz(request: Request, env: Env): Response {
       live_order_api: readiness.liveOrderApi,
       signing: readiness.signing,
       builder_attribution: readiness.builderAttribution,
+      live_trading_allowlist: readiness.liveTradingAllowlist,
       warnings: readiness.warnings,
     },
   });

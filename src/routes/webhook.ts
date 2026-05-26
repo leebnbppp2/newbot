@@ -53,16 +53,24 @@ interface CallbackReplyResult {
 const TELEGRAM_SECRET_HEADER = 'x-telegram-bot-api-secret-token';
 
 function isTelegramOperator(env: Env, telegramUserId: string): boolean {
-  const raw = env.NEWBOT_OPERATOR_TELEGRAM_IDS?.trim();
-  if (!raw) {
+  return isIdInOptionalCsvAllowlist(env.NEWBOT_OPERATOR_TELEGRAM_IDS, telegramUserId);
+}
+
+function isLiveTradingAllowed(env: Env, telegramUserId: string): boolean {
+  return isIdInOptionalCsvAllowlist(env.NEWBOT_LIVE_TRADING_TELEGRAM_IDS, telegramUserId);
+}
+
+function isIdInOptionalCsvAllowlist(raw: string | undefined, id: string): boolean {
+  const value = raw?.trim();
+  if (!value) {
     return true;
   }
 
-  return raw
+  return value
     .split(',')
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0)
-    .includes(telegramUserId);
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .includes(id);
 }
 
 export async function handleTelegramWebhook(request: Request, env: Env, personaId: string): Promise<Response> {
@@ -459,13 +467,25 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
   }
 
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.name.toLowerCase() === normalizedOutcome.toLowerCase());
-  const execution = await executeBuyOrder(env, {
-    market,
-    outcome: selectedOutcome?.name ?? normalizedOutcome,
-    tokenId: selectedOutcome?.tokenId ?? 'simulated-token',
-    amountUsdc,
-    account,
-  });
+  const liveTradingAllowed = isLiveTradingAllowed(env, telegramUserId);
+  const execution = liveTradingAllowed
+    ? await executeBuyOrder(env, {
+      market,
+      outcome: selectedOutcome?.name ?? normalizedOutcome,
+      tokenId: selectedOutcome?.tokenId ?? 'simulated-token',
+      amountUsdc,
+      account,
+    })
+    : {
+      mode: 'simulated' as const,
+      status: 'simulated_submitted',
+      orderId: `sim-${Date.now()}`,
+      detail: {
+        reason: 'live_trading_not_allowlisted',
+        message: 'live 交易还没对你开放，先按模拟单记录。',
+      },
+      builderAttribution: null,
+    };
 
   const tradeEventId = await createTradeEvent(env, {
     telegramUserId,
@@ -505,6 +525,7 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
     execution.orderId,
     execution.mode,
     execution.status,
+    liveTradingAllowed ? undefined : 'live 交易还没对你开放，所以这笔先按模拟单记录。你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。',
   );
 }
 

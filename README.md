@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 22：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 23：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -20,6 +20,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - 可选 Telegram 操作者白名单，限制系统状态入口只给配置过的操作者使用
 - `npm run smoke -- <worker-url>` 上线后 smoke 脚本，检查 `/healthz`、`/version` 和 webhook secret 保护
 - Telegram 内 `/runbook` / `/rollout` 灰度 runbook 面板，把 smoke、readiness、1% allowlist、10%、100% 和回滚条件放到同一个操作者入口
+- `NEWBOT_LIVE_TRADING_TELEGRAM_IDS` 用户级 live 交易 allowlist；不在列表里的用户即使 live API 已配置也只记录模拟单
 
 ## 5 步部署
 
@@ -54,6 +55,9 @@ npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 如果你要启用 Phase 20 的 Telegram 内部状态入口权限限制，可以额外提供：
 - `NEWBOT_OPERATOR_TELEGRAM_IDS`：逗号分隔的 Telegram user id，例如 `123456,789012`
 
+如果你要启用 Phase 23 的真实下单用户级灰度，可以额外提供：
+- `NEWBOT_LIVE_TRADING_TELEGRAM_IDS`：逗号分隔的 Telegram user id；配置后只有列表里的用户会走 live order API，其他用户继续模拟单
+
 5. 应用 schema、部署、设置 webhook
 ```bash
 npm run d1:apply
@@ -73,12 +77,13 @@ npm run smoke -- https://<your-worker>.workers.dev
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 22 行为
+## 当前 Phase 23 行为
 
 - `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
   - live order API 是否完整可用
   - canonical signing 是否已启用
   - Builder Program 是 `ready / partial / disabled`
+  - live trading allowlist 是否已启用
   - 当前还有哪些上线前 warning
 - `GET /version` → `{ version: "0.1.0" }`
 - `npm run smoke -- <worker-url>` → 上线后做只读 smoke：检查 `/healthz` readiness 结构、`/version`，并用无效 secret 确认 webhook 返回 401，不会触发真实 Telegram 消息或写入业务数据
@@ -96,6 +101,7 @@ curl https://<your-worker>.workers.dev/healthz
     - `managed_signer` 会走 `clob_delegate`
     - `wallet_signature` 会走 `clob_wallet`
     - 有 live API 配置就发真实请求
+    - 如果配置了 `NEWBOT_LIVE_TRADING_TELEGRAM_IDS`，只有 allowlist 内用户会走真实请求；其他用户会明确回退成模拟单，并在 payload 里记录 `live_trading_not_allowlisted`
     - 有 signing secret 会附带更正式的 canonical signature headers：
       - `x-order-signature`
       - `x-order-body-sha256`
@@ -111,9 +117,9 @@ curl https://<your-worker>.workers.dev/healthz
   - `/positions` / `/positions 2` / `/positions p2` → 优先返回远端 portfolio 持仓；远端失败时优先读缓存；会显示总敞口、已实现/未实现盈亏、分页游标和下一页 token，并标记当前是实时数据还是缓存
   - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页；如果是缓存回退也会直接提示
   - `/cancel <orderId>` → 对 live 订单发撤单请求；如果有 signing secret，撤单请求也会附带同一套 canonical signature headers
-  - `/health` / `/ops` / `/readiness` → 在 Telegram 里直接查看 live order API、canonical signing、Builder attribution 和当前配置 warning；如果配置了 `NEWBOT_OPERATOR_TELEGRAM_IDS`，只有白名单里的 Telegram user id 可以查看
+  - `/health` / `/ops` / `/readiness` → 在 Telegram 里直接查看 live order API、canonical signing、Builder attribution、live trading allowlist 和当前配置 warning；如果配置了 `NEWBOT_OPERATOR_TELEGRAM_IDS`，只有白名单里的 Telegram user id 可以查看
   - `/runbook` / `/rollout` → 操作者专用灰度 runbook：先跑 `npm run smoke -- <worker-url>`，再按 1% / allowlist、10%、100% 放量，并列出回滚条件；不会展示任何 secret 原文
-  - 其他文本 → 先记录对话，再返回 Phase 22 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 23 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态

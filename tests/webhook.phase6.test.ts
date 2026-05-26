@@ -455,6 +455,62 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(payload.text).toContain('live-ord-123');
   });
 
+  it('keeps live buy requests simulated when a user is outside the live trading allowlist', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const env = makeEnv(db, {
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+      NEWBOT_LIVE_TRADING_TELEGRAM_IDS: '9001,9002',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify([
+          {
+            question: 'Will BTC break 120k in 2026?',
+            volume: 1234567,
+            endDate: '2026-12-31T00:00:00Z',
+            slug: 'btc-break-120k-2026',
+            outcomes: '["Yes","No"]',
+            outcomePrices: '["0.61","0.39"]',
+            clobTokenIds: '["111","222"]',
+          },
+        ]), { status: 200 });
+      }
+      if (url === 'https://orders.example.com/orders') {
+        throw new Error('live order endpoint should not be called for non-allowlisted users');
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/buy btc yes 50', 1001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(db.tradeEvents).toHaveLength(1);
+    expect(db.builderAttributions).toHaveLength(0);
+    expect(db.tradeEvents[0]).toMatchObject({
+      status: 'simulated_submitted',
+      order_id: expect.stringMatching(/^sim-/),
+    });
+    expect(db.tradeEvents[0]?.payload_json).toContain('live_trading_not_allowlisted');
+    const orderCalls = fetchMock.mock.calls.filter(([input]) => String(input) === 'https://orders.example.com/orders');
+    expect(orderCalls).toHaveLength(0);
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('模拟下单已经记录');
+    expect(payload.text).toContain('live 交易还没对你开放');
+  });
+
   it('submits a live buy request with wallet-signature metadata when wallet mode is present', async () => {
     const db = new FakeD1();
     db.tradingAccounts.set('1001:crypto_zh', {
@@ -1191,6 +1247,7 @@ describe('handleTelegramWebhook phase 6', () => {
       POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
       POLYMARKET_BUILDER_TAG: 'newbot-builder',
       POLYMARKET_BUILDER_API_KEY: 'builder-key',
+      NEWBOT_LIVE_TRADING_TELEGRAM_IDS: '9001,9002',
     });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
 
@@ -1204,6 +1261,7 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(payload.text).toContain('1% / allowlist');
     expect(payload.text).toContain('Live order API：已配置');
     expect(payload.text).toContain('Canonical signing：已启用');
+    expect(payload.text).toContain('Live trading allowlist：已启用');
     expect(payload.text).not.toContain('builder-key');
     expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
       expect.arrayContaining([
