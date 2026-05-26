@@ -425,7 +425,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 23 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；live 交易可以用用户 allowlist 灰度开放。',
+    text: '我先记下了。现在 Phase 24 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；上线 smoke 可以用 --require-ready 做放量前阻断检查。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -463,13 +463,14 @@ export function buildRunbookReply(readiness: OrderGatewayReadiness): BotReply {
 
   return {
     text: [
-      'Phase 22 灰度 runbook：',
+      'Phase 24 灰度 runbook：',
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,
       `Live trading allowlist：${readiness.liveTradingAllowlist ? '已启用' : '未启用'}`,
       '上线前：',
       '- npm run smoke -- <worker-url>',
+      '- npm run smoke -- --require-ready <worker-url>',
       '- /health 确认没有阻断项',
       '放量顺序：',
       '- 1% / allowlist：只放内部操作者和少量测试用户',

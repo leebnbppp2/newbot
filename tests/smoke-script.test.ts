@@ -23,7 +23,7 @@ function runSmoke(args: string[]) {
   });
 }
 
-describe('Phase 21 smoke script', () => {
+describe('Phase 24 smoke script', () => {
   it('checks healthz, version, and webhook secret enforcement without mutating Telegram', async () => {
     const seenRequests: Array<{ method?: string; url?: string; secret?: string }> = [];
     const server = createServer((request, response) => {
@@ -42,6 +42,7 @@ describe('Phase 21 smoke script', () => {
             live_order_api: true,
             signing: true,
             builder_attribution: 'ready',
+            live_trading_allowlist: true,
             warnings: [],
           },
         }));
@@ -86,11 +87,72 @@ describe('Phase 21 smoke script', () => {
         expect.objectContaining({ name: 'version', ok: true }),
         expect.objectContaining({ name: 'webhook_secret_enforced', ok: true }),
       ]));
+      expect(payload.checks.find((check) => check.name === 'healthz')?.detail).toContain('live allowlist enabled');
       expect(seenRequests).toEqual(expect.arrayContaining([
         expect.objectContaining({ method: 'GET', url: '/healthz' }),
         expect.objectContaining({ method: 'GET', url: '/version' }),
         expect.objectContaining({ method: 'POST', url: '/telegram/webhook/crypto_zh', secret: 'newbot-smoke-invalid-secret' }),
       ]));
+    } finally {
+      server.close();
+    }
+  });
+
+  it('can fail a rollout smoke when strict readiness has blockers', async () => {
+    const server = createServer((request, response) => {
+      if (request.method === 'GET' && request.url === '/healthz') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          ok: true,
+          version: '0.6.0',
+          readiness: {
+            live_order_api: true,
+            signing: false,
+            builder_attribution: 'partial',
+            live_trading_allowlist: false,
+            warnings: ['signing secret 还没配置。'],
+          },
+        }));
+        return;
+      }
+
+      if (request.method === 'GET' && request.url === '/version') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ version: '0.6.0' }));
+        return;
+      }
+
+      if (request.method === 'POST' && request.url === '/telegram/webhook/crypto_zh') {
+        response.writeHead(401, { 'content-type': 'text/plain' });
+        response.end('Unauthorized');
+        return;
+      }
+
+      response.writeHead(404, { 'content-type': 'text/plain' });
+      response.end('not found');
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected TCP test server address');
+    }
+
+    try {
+      const result = await runSmoke(['--require-ready', `http://127.0.0.1:${address.port}`]);
+
+      expect(result.stdout).toBe('');
+      expect(result.code).toBe(1);
+      const payload = JSON.parse(result.stderr) as {
+        ok: boolean;
+        checks: Array<{ name: string; ok: boolean; detail: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'rollout_readiness', ok: false }),
+      ]));
+      expect(payload.checks.find((check) => check.name === 'rollout_readiness')?.detail).toContain('signing secret');
     } finally {
       server.close();
     }

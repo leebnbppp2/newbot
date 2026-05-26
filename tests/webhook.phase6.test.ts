@@ -1256,8 +1256,9 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string; reply_markup?: ReplyMarkup };
-    expect(payload.text).toContain('Phase 22 灰度 runbook');
+    expect(payload.text).toContain('Phase 24 灰度 runbook');
     expect(payload.text).toContain('npm run smoke -- <worker-url>');
+    expect(payload.text).toContain('npm run smoke -- --require-ready <worker-url>');
     expect(payload.text).toContain('1% / allowlist');
     expect(payload.text).toContain('Live order API：已配置');
     expect(payload.text).toContain('Canonical signing：已启用');
@@ -1291,7 +1292,7 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, editInit] = editCall as [string, RequestInit];
     const payload = JSON.parse(String(editInit.body)) as { text: string };
     expect(payload.text).toContain('这个系统状态入口只给配置过的操作者使用');
-    expect(payload.text).not.toContain('Phase 22 灰度 runbook');
+    expect(payload.text).not.toContain('Phase 24 灰度 runbook');
   });
 
   it('lists recent simulated orders', async () => {

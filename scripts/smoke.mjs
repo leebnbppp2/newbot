@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 
-const workerUrl = normalizeWorkerUrl(process.argv[2] ?? process.env.WORKER_URL);
+const options = parseArgs(process.argv.slice(2));
+const workerUrl = normalizeWorkerUrl(options.target ?? process.env.WORKER_URL);
 
 if (!workerUrl) {
-  console.error('Usage: node scripts/smoke.mjs https://<your-worker>.workers.dev');
+  console.error('Usage: node scripts/smoke.mjs [--require-ready] https://<your-worker>.workers.dev');
   process.exit(1);
 }
 
 const checks = [];
 
 try {
-  checks.push(await checkHealthz(workerUrl));
+  const healthz = await fetchHealthz(workerUrl);
+  checks.push(buildHealthzCheck(healthz));
+  if (options.requireReady) {
+    checks.push(buildRolloutReadinessCheck(healthz.payload?.readiness));
+  }
   checks.push(await checkVersion(workerUrl));
   checks.push(await checkWebhookSecret(workerUrl));
 } catch (error) {
@@ -37,6 +42,25 @@ if (ok) {
 console.error(output);
 process.exit(1);
 
+function parseArgs(args) {
+  const options = {
+    requireReady: false,
+    target: null,
+  };
+
+  for (const arg of args) {
+    if (arg === '--require-ready') {
+      options.requireReady = true;
+      continue;
+    }
+    if (!options.target) {
+      options.target = arg;
+    }
+  }
+
+  return options;
+}
+
 function normalizeWorkerUrl(value) {
   if (!value || value.trim().length === 0) {
     return null;
@@ -49,9 +73,13 @@ function normalizeWorkerUrl(value) {
   return url;
 }
 
-async function checkHealthz(baseUrl) {
+async function fetchHealthz(baseUrl) {
   const response = await fetch(new URL('/healthz', baseUrl));
   const payload = await parseJson(response);
+  return { response, payload };
+}
+
+function buildHealthzCheck({ response, payload }) {
   const readiness = payload?.readiness;
   const ok = response.ok
     && payload?.ok === true
@@ -59,12 +87,39 @@ async function checkHealthz(baseUrl) {
     && typeof readiness?.live_order_api === 'boolean'
     && typeof readiness?.signing === 'boolean'
     && typeof readiness?.builder_attribution === 'string'
+    && typeof readiness?.live_trading_allowlist === 'boolean'
     && Array.isArray(readiness?.warnings);
 
+  const allowlistState = readiness?.live_trading_allowlist ? 'enabled' : 'disabled';
   return {
     name: 'healthz',
     ok,
-    detail: ok ? `healthz ok, version ${payload.version}` : `unexpected /healthz response: ${response.status}`,
+    detail: ok ? `healthz ok, version ${payload.version}, live allowlist ${allowlistState}` : `unexpected /healthz response: ${response.status}`,
+  };
+}
+
+function buildRolloutReadinessCheck(readiness) {
+  const blockers = [];
+  if (!readiness?.live_order_api) {
+    blockers.push('live order API not ready');
+  }
+  if (!readiness?.signing) {
+    blockers.push('canonical signing not ready');
+  }
+  if (readiness?.builder_attribution === 'partial') {
+    blockers.push('builder attribution partial');
+  }
+  if (Array.isArray(readiness?.warnings)) {
+    blockers.push(...readiness.warnings);
+  } else {
+    blockers.push('readiness warnings missing');
+  }
+
+  const uniqueBlockers = [...new Set(blockers)];
+  return {
+    name: 'rollout_readiness',
+    ok: uniqueBlockers.length === 0,
+    detail: uniqueBlockers.length === 0 ? 'rollout readiness has no blockers' : uniqueBlockers.join('; '),
   };
 }
 
