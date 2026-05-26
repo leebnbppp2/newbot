@@ -424,7 +424,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 20 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health；如果配置了操作者白名单，系统状态只给操作者看。',
+    text: '我先记下了。现在 Phase 21 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health；上线后可以用 npm run smoke 做一遍只读检查。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }

@@ -9,6 +9,7 @@
     "test:watch": "vitest",
     "deploy": "node scripts/deploy.mjs deploy",
     "build": "node scripts/deploy.mjs build",
+    "smoke": "node scripts/smoke.mjs",
     "d1:apply": "node scripts/apply-sql.mjs newbot-db migrations/0001_init.sql"
   },
   "dependencies": {

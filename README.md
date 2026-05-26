@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 20：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 21：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -18,6 +18,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - 更正式的 canonical signature header / signature envelope
 - Telegram 内 `/health` / `/ops` / 系统状态按钮，直接查看 live API、签名和 Builder 配置 readiness
 - 可选 Telegram 操作者白名单，限制系统状态入口只给配置过的操作者使用
+- `npm run smoke -- <worker-url>` 上线后 smoke 脚本，检查 `/healthz`、`/version` 和 webhook secret 保护
 
 ## 5 步部署
 
@@ -67,10 +68,11 @@ node scripts/set-webhook.mjs
 ```bash
 npm run typecheck
 npm test
+npm run smoke -- https://<your-worker>.workers.dev
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 20 行为
+## 当前 Phase 21 行为
 
 - `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
   - live order API 是否完整可用
@@ -78,6 +80,7 @@ curl https://<your-worker>.workers.dev/healthz
   - Builder Program 是 `ready / partial / disabled`
   - 当前还有哪些上线前 warning
 - `GET /version` → `{ version: "0.1.0" }`
+- `npm run smoke -- <worker-url>` → 上线后做只读 smoke：检查 `/healthz` readiness 结构、`/version`，并用无效 secret 确认 webhook 返回 401，不会触发真实 Telegram 消息或写入业务数据
 - `GET /portal/link/:token` → 返回账户连接页面，展示口令、有效期和绑定表单
 - `POST /portal/link/:token/complete` → 提交后把账户状态写入 `user_trading_accounts`，并把当前会话标记为 `linked`
 - Telegram 文本指令：
@@ -108,7 +111,7 @@ curl https://<your-worker>.workers.dev/healthz
   - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页；如果是缓存回退也会直接提示
   - `/cancel <orderId>` → 对 live 订单发撤单请求；如果有 signing secret，撤单请求也会附带同一套 canonical signature headers
   - `/health` / `/ops` / `/readiness` → 在 Telegram 里直接查看 live order API、canonical signing、Builder attribution 和当前配置 warning；如果配置了 `NEWBOT_OPERATOR_TELEGRAM_IDS`，只有白名单里的 Telegram user id 可以查看
-  - 其他文本 → 先记录对话，再返回 Phase 20 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 21 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
