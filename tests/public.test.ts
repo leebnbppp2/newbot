@@ -1,11 +1,49 @@
 import { describe, expect, it } from 'vitest';
 
-import { handleHealthz, handleVersion } from '../src/routes/public';
+import { handleHealthz, handleSmokeReport, handleVersion } from '../src/routes/public';
 import type { Env } from '../src/types';
 
-function makeEnv(overrides: Partial<Env> = {}): Env {
+type CronRunRow = {
+  job_name: string;
+  status: string;
+  detail: string;
+};
+
+class FakeD1 {
+  cronRuns: CronRunRow[] = [];
+
+  prepare(query: string) {
+    return new FakePreparedStatement(this, query);
+  }
+}
+
+class FakePreparedStatement {
+  private values: unknown[] = [];
+
+  constructor(
+    private readonly db: FakeD1,
+    private readonly query: string,
+  ) {}
+
+  bind(...values: unknown[]) {
+    this.values = values;
+    return this;
+  }
+
+  async run() {
+    if (this.query.includes('INSERT INTO cron_runs')) {
+      const [jobName, status, detail] = this.values as [string, string, string];
+      this.db.cronRuns.push({ job_name: jobName, status, detail });
+      return { success: true };
+    }
+
+    throw new Error(`Unsupported run query: ${this.query}`);
+  }
+}
+
+function makeEnv(overrides: Partial<Env> = {}, db: FakeD1 = new FakeD1()): Env {
   return {
-    DB: {} as D1Database,
+    DB: db as unknown as D1Database,
     TRADE_COORDINATOR: {} as DurableObjectNamespace,
     APP_ENV: 'test',
     NEWBOT_VERSION: '0.6.0',
@@ -53,5 +91,48 @@ describe('public routes', () => {
 
     expect(response.status).toBe(200);
     expect(payload).toEqual({ version: '0.6.0' });
+  });
+
+  it('stores an authenticated smoke report in cron_runs', async () => {
+    const db = new FakeD1();
+    const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' }, db);
+    const report = {
+      ok: false,
+      target: 'https://newbot.example.workers.dev',
+      checks: [{ name: 'rollout_readiness', ok: false, detail: 'canonical signing not ready' }],
+    };
+
+    const response = await handleSmokeReport(new Request('https://example.com/ops/smoke-report', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-newbot-smoke-report-secret': 'report-secret',
+      },
+      body: JSON.stringify(report),
+    }), env);
+    const payload = await response.json() as { ok: boolean; stored: boolean };
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ ok: true, stored: true });
+    expect(db.cronRuns).toHaveLength(1);
+    expect(db.cronRuns[0]).toMatchObject({ job_name: 'smoke', status: 'failed' });
+    expect(JSON.parse(db.cronRuns[0]?.detail ?? '{}')).toMatchObject(report);
+  });
+
+  it('rejects smoke reports without the configured report secret', async () => {
+    const db = new FakeD1();
+    const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' }, db);
+
+    const response = await handleSmokeReport(new Request('https://example.com/ops/smoke-report', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-newbot-smoke-report-secret': 'wrong-secret',
+      },
+      body: JSON.stringify({ ok: true, target: 'https://newbot.example.workers.dev', checks: [] }),
+    }), env);
+
+    expect(response.status).toBe(401);
+    expect(db.cronRuns).toHaveLength(0);
   });
 });

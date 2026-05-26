@@ -2,9 +2,11 @@
 
 const options = parseArgs(process.argv.slice(2));
 const workerUrl = normalizeWorkerUrl(options.target ?? process.env.WORKER_URL);
+options.reportUrl ??= process.env.SMOKE_REPORT_URL ?? null;
+options.reportSecret ??= process.env.SMOKE_REPORT_SECRET ?? null;
 
 if (!workerUrl) {
-  console.error('Usage: node scripts/smoke.mjs [--require-ready] https://<your-worker>.workers.dev');
+  console.error('Usage: node scripts/smoke.mjs [--require-ready] [--report-url <url>] [--report-secret <secret>] https://<your-worker>.workers.dev');
   process.exit(1);
 }
 
@@ -33,8 +35,16 @@ const payload = {
   checks,
 };
 
+if (options.reportUrl) {
+  const reportCheck = await postSmokeReport(options.reportUrl, options.reportSecret, payload);
+  if (!reportCheck.ok) {
+    payload.checks.push(reportCheck);
+    payload.ok = false;
+  }
+}
+
 const output = JSON.stringify(payload, null, 2);
-if (ok) {
+if (payload.ok) {
   console.log(output);
   process.exit(0);
 }
@@ -46,11 +56,24 @@ function parseArgs(args) {
   const options = {
     requireReady: false,
     target: null,
+    reportUrl: null,
+    reportSecret: null,
   };
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     if (arg === '--require-ready') {
       options.requireReady = true;
+      continue;
+    }
+    if (arg === '--report-url') {
+      options.reportUrl = args[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg === '--report-secret') {
+      options.reportSecret = args[index + 1] ?? null;
+      index += 1;
       continue;
     }
     if (!options.target) {
@@ -158,5 +181,30 @@ async function parseJson(response) {
     return await response.json();
   } catch {
     return null;
+  }
+}
+
+async function postSmokeReport(reportUrl, reportSecret, payload) {
+  try {
+    const headers = { 'content-type': 'application/json' };
+    if (reportSecret) {
+      headers['x-newbot-smoke-report-secret'] = reportSecret;
+    }
+    const response = await fetch(reportUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    return {
+      name: 'smoke_report_delivery',
+      ok: response.ok,
+      detail: response.ok ? 'smoke report delivered' : `smoke report delivery failed: ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      name: 'smoke_report_delivery',
+      ok: false,
+      detail: error instanceof Error ? error.message : String(error),
+    };
   }
 }

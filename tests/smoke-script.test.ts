@@ -157,4 +157,84 @@ describe('Phase 24 smoke script', () => {
       server.close();
     }
   });
+
+  it('can post a structured smoke report to an authenticated report endpoint', async () => {
+    let receivedReport: unknown = null;
+    let receivedSecret: string | undefined;
+    const server = createServer((request, response) => {
+      if (request.method === 'GET' && request.url === '/healthz') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          ok: true,
+          version: '0.6.0',
+          readiness: {
+            live_order_api: true,
+            signing: true,
+            builder_attribution: 'ready',
+            live_trading_allowlist: true,
+            warnings: [],
+          },
+        }));
+        return;
+      }
+
+      if (request.method === 'GET' && request.url === '/version') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ version: '0.6.0' }));
+        return;
+      }
+
+      if (request.method === 'POST' && request.url === '/telegram/webhook/crypto_zh') {
+        response.writeHead(401, { 'content-type': 'text/plain' });
+        response.end('Unauthorized');
+        return;
+      }
+
+      if (request.method === 'POST' && request.url === '/ops/smoke-report') {
+        receivedSecret = request.headers['x-newbot-smoke-report-secret'] as string | undefined;
+        let body = '';
+        request.on('data', (chunk) => {
+          body += String(chunk);
+        });
+        request.on('end', () => {
+          receivedReport = JSON.parse(body);
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ ok: true, stored: true }));
+        });
+        return;
+      }
+
+      response.writeHead(404, { 'content-type': 'text/plain' });
+      response.end('not found');
+    });
+
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected TCP test server address');
+    }
+
+    try {
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const result = await runSmoke([
+        baseUrl,
+        '--report-url', `${baseUrl}/ops/smoke-report`,
+        '--report-secret', 'report-secret',
+      ]);
+
+      expect(result.stderr).toBe('');
+      expect(result.code).toBe(0);
+      expect(receivedSecret).toBe('report-secret');
+      expect(receivedReport).toMatchObject({
+        ok: true,
+        target: baseUrl,
+        checks: expect.arrayContaining([
+          expect.objectContaining({ name: 'healthz', ok: true }),
+        ]),
+      });
+    } finally {
+      server.close();
+    }
+  });
 });
