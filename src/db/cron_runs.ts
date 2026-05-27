@@ -47,6 +47,16 @@ export async function getLatestSmokeReportRunsByEnvironment(env: Env): Promise<S
   return results.slice(0, 5);
 }
 
+export async function getLatestSmokeReportRunForEnvironment(env: Env, environment: string): Promise<SmokeReportRun | null> {
+  const expectedEnvironment = environment.trim().toLowerCase();
+  if (!expectedEnvironment) {
+    return null;
+  }
+
+  const runs = await listRecentSmokeReportRuns(env, 50);
+  return runs.find((run) => run.detail?.environment?.toLowerCase() === expectedEnvironment) ?? null;
+}
+
 async function listRecentSmokeReportRuns(env: Env, limit: number): Promise<SmokeReportRun[]> {
   const { results } = await env.DB.prepare(
     `SELECT id, job_name, status, detail, created_at

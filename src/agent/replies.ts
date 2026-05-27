@@ -426,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 28 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；runbook 会显示全局最近 smoke，也会列出各环境最近状态。',
+    text: '我先记下了。现在 Phase 29 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；/runbook production 这类命令可以只看指定环境的 smoke 状态。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -461,16 +461,18 @@ export function buildRunbookReply(
   readiness: OrderGatewayReadiness,
   latestSmokeReport?: SmokeReportRun | null,
   smokeReportsByEnvironment: SmokeReportRun[] = [],
+  selectedEnvironment?: string,
 ): BotReply {
   const blockers = readiness.warnings.length > 0
     ? readiness.warnings.map((warning) => `- ${warning}`)
     : ['暂时没有阻断项'];
   const smokeLines = buildSmokeReportLines(latestSmokeReport);
   const environmentSmokeLines = buildEnvironmentSmokeReportLines(smokeReportsByEnvironment);
+  const title = selectedEnvironment ? `Phase 29 灰度 runbook（${selectedEnvironment}）` : 'Phase 29 灰度 runbook：';
 
   return {
     text: [
-      'Phase 28 灰度 runbook：',
+      title,
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,

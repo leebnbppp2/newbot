@@ -22,7 +22,11 @@ import {
 } from '../agent/replies';
 import { createAccountLinkSession } from '../db/account_sessions';
 import { createBuilderAttribution } from '../db/builder_attributions';
-import { getLatestSmokeReportRun, getLatestSmokeReportRunsByEnvironment } from '../db/cron_runs';
+import {
+  getLatestSmokeReportRun,
+  getLatestSmokeReportRunForEnvironment,
+  getLatestSmokeReportRunsByEnvironment,
+} from '../db/cron_runs';
 import { appendConversationTurn } from '../db/conversations';
 import {
   createTradeEvent,
@@ -161,9 +165,19 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     return buildHealthReply(getOrderGatewayReadiness(env));
   }
 
-  if (normalized === '/runbook' || normalized === '/rollout') {
+  if (normalized.startsWith('/runbook') || normalized.startsWith('/rollout')) {
     if (!isTelegramOperator(env, telegramUserId)) {
       return buildOperatorOnlyReply();
+    }
+    const smokeEnvironment = parseRunbookEnvironment(text);
+    if (smokeEnvironment) {
+      const environmentSmokeReport = await getLatestSmokeReportRunForEnvironment(env, smokeEnvironment);
+      return buildRunbookReply(
+        getOrderGatewayReadiness(env),
+        environmentSmokeReport,
+        environmentSmokeReport ? [environmentSmokeReport] : [],
+        smokeEnvironment,
+      );
     }
     return buildRunbookReply(
       getOrderGatewayReadiness(env),
@@ -546,6 +560,19 @@ function normalizeOutcome(value: string): string | null {
   if (normalized === 'yes') return 'Yes';
   if (normalized === 'no') return 'No';
   return null;
+}
+
+function parseRunbookEnvironment(text: string): string | null {
+  const parts = text.trim().split(/\s+/);
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const environment = parts[1]?.trim().toLowerCase() ?? '';
+  if (!/^[a-z0-9_-]{1,32}$/.test(environment)) {
+    return null;
+  }
+  return environment;
 }
 
 function parseCommandPage(text: string): number {
