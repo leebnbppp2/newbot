@@ -426,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 26 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；runbook 会读取最近一次 smoke 回传结果。',
+    text: '我先记下了。现在 Phase 27 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；smoke 回传可以带环境标签，runbook 会显示最近一次结果。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -465,7 +465,7 @@ export function buildRunbookReply(readiness: OrderGatewayReadiness, latestSmokeR
 
   return {
     text: [
-      'Phase 26 灰度 runbook：',
+      'Phase 27 灰度 runbook：',
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,
@@ -474,7 +474,7 @@ export function buildRunbookReply(readiness: OrderGatewayReadiness, latestSmokeR
       '上线前：',
       '- npm run smoke -- <worker-url>',
       '- npm run smoke -- --require-ready <worker-url>',
-      '- 可选：加 --report-url /ops/smoke-report 回传 smoke 结果',
+      '- 可选：加 --report-url /ops/smoke-report 和 --report-env production 回传 smoke 结果',
       '- /health 确认没有阻断项',
       '放量顺序：',
       '- 1% / allowlist：只放内部操作者和少量测试用户',
@@ -503,9 +503,11 @@ function buildSmokeReportLines(report?: SmokeReportRun | null): string[] {
     return `- ${check.name} ${state}`;
   });
   const status = report.detail.ok ? '通过' : '失败';
+  const environmentLine = report.detail.environment ? [`环境：${report.detail.environment}`] : [];
   return [
     `最近 smoke：${status}`,
     `目标：${report.detail.target}`,
+    ...environmentLine,
     `时间：${report.createdAt}`,
     ...checkLines,
   ];

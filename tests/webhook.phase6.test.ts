@@ -1275,7 +1275,7 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string; reply_markup?: ReplyMarkup };
-    expect(payload.text).toContain('Phase 26 灰度 runbook');
+    expect(payload.text).toContain('Phase 27 灰度 runbook');
     expect(payload.text).toContain('npm run smoke -- <worker-url>');
     expect(payload.text).toContain('npm run smoke -- --require-ready <worker-url>');
     expect(payload.text).toContain('--report-url /ops/smoke-report');
@@ -1312,6 +1312,7 @@ describe('handleTelegramWebhook phase 6', () => {
         detail: JSON.stringify({
           ok: true,
           target: 'https://newbot.example.workers.dev',
+          environment: 'production',
           checks: [
             { name: 'healthz', ok: true },
             { name: 'version', ok: true },
@@ -1338,6 +1339,7 @@ describe('handleTelegramWebhook phase 6', () => {
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('最近 smoke：通过');
     expect(payload.text).toContain('https://newbot.example.workers.dev');
+    expect(payload.text).toContain('环境：production');
     expect(payload.text).toContain('healthz 通过');
     expect(payload.text).not.toContain('old-worker');
   });
@@ -1363,7 +1365,7 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, editInit] = editCall as [string, RequestInit];
     const payload = JSON.parse(String(editInit.body)) as { text: string };
     expect(payload.text).toContain('这个系统状态入口只给配置过的操作者使用');
-    expect(payload.text).not.toContain('Phase 26 灰度 runbook');
+    expect(payload.text).not.toContain('Phase 27 灰度 runbook');
   });
 
   it('lists recent simulated orders', async () => {

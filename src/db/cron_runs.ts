@@ -17,6 +17,7 @@ export interface SmokeReportCheck {
 export interface SmokeReportDetail {
   ok: boolean;
   target: string;
+  environment?: string;
   checks: SmokeReportCheck[];
 }
 
@@ -55,7 +56,7 @@ function parseSmokeReportDetail(value: string | null): SmokeReportDetail | null 
   }
 
   try {
-    const parsed = JSON.parse(value) as { ok?: unknown; target?: unknown; checks?: unknown };
+    const parsed = JSON.parse(value) as { ok?: unknown; target?: unknown; environment?: unknown; checks?: unknown };
     if (typeof parsed.ok !== 'boolean' || typeof parsed.target !== 'string' || !Array.isArray(parsed.checks)) {
       return null;
     }
@@ -78,11 +79,15 @@ function parseSmokeReportDetail(value: string | null): SmokeReportDetail | null 
         return result;
       });
 
-    return {
+    const result: SmokeReportDetail = {
       ok: parsed.ok,
       target: parsed.target,
       checks,
     };
+    if (typeof parsed.environment === 'string' && parsed.environment.trim().length > 0) {
+      result.environment = parsed.environment.trim();
+    }
+    return result;
   } catch (_error) {
     return null;
   }

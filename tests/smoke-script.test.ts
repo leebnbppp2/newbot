@@ -221,6 +221,7 @@ describe('Phase 24 smoke script', () => {
         baseUrl,
         '--report-url', `${baseUrl}/ops/smoke-report`,
         '--report-secret', 'report-secret',
+        '--report-env', 'production',
       ]);
 
       expect(result.stderr).toBe('');
@@ -229,6 +230,7 @@ describe('Phase 24 smoke script', () => {
       expect(receivedReport).toMatchObject({
         ok: true,
         target: baseUrl,
+        environment: 'production',
         checks: expect.arrayContaining([
           expect.objectContaining({ name: 'healthz', ok: true }),
         ]),

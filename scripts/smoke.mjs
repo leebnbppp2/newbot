@@ -4,9 +4,10 @@ const options = parseArgs(process.argv.slice(2));
 const workerUrl = normalizeWorkerUrl(options.target ?? process.env.WORKER_URL);
 options.reportUrl ??= process.env.SMOKE_REPORT_URL ?? null;
 options.reportSecret ??= process.env.SMOKE_REPORT_SECRET ?? null;
+options.reportEnv ??= process.env.SMOKE_REPORT_ENV ?? null;
 
 if (!workerUrl) {
-  console.error('Usage: node scripts/smoke.mjs [--require-ready] [--report-url <url>] [--report-secret <secret>] https://<your-worker>.workers.dev');
+  console.error('Usage: node scripts/smoke.mjs [--require-ready] [--report-url <url>] [--report-secret <secret>] [--report-env <environment>] https://<your-worker>.workers.dev');
   process.exit(1);
 }
 
@@ -34,6 +35,9 @@ const payload = {
   target: workerUrl.toString().replace(/\/$/, ''),
   checks,
 };
+if (options.reportEnv) {
+  payload.environment = options.reportEnv;
+}
 
 if (options.reportUrl) {
   const reportCheck = await postSmokeReport(options.reportUrl, options.reportSecret, payload);
@@ -58,6 +62,7 @@ function parseArgs(args) {
     target: null,
     reportUrl: null,
     reportSecret: null,
+    reportEnv: null,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -73,6 +78,11 @@ function parseArgs(args) {
     }
     if (arg === '--report-secret') {
       options.reportSecret = args[index + 1] ?? null;
+      index += 1;
+      continue;
+    }
+    if (arg === '--report-env') {
+      options.reportEnv = args[index + 1] ?? null;
       index += 1;
       continue;
     }
