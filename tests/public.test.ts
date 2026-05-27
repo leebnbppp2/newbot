@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { handleHealthz, handleSmokeReport, handleVersion } from '../src/routes/public';
+import { handleHealthz, handleSmokeMetrics, handleSmokeReport, handleVersion } from '../src/routes/public';
 import type { Env } from '../src/types';
 
 type CronRunRow = {
+  id: number;
   job_name: string;
   status: string;
   detail: string;
+  created_at: string;
 };
 
 class FakeD1 {
@@ -33,11 +35,30 @@ class FakePreparedStatement {
   async run() {
     if (this.query.includes('INSERT INTO cron_runs')) {
       const [jobName, status, detail] = this.values as [string, string, string];
-      this.db.cronRuns.push({ job_name: jobName, status, detail });
+      this.db.cronRuns.push({
+        id: this.db.cronRuns.length + 1,
+        job_name: jobName,
+        status,
+        detail,
+        created_at: new Date(0).toISOString(),
+      });
       return { success: true };
     }
 
     throw new Error(`Unsupported run query: ${this.query}`);
+  }
+
+  async all<T>() {
+    if (this.query.includes('FROM cron_runs')) {
+      const [jobName, limit] = this.values as [string, number | undefined];
+      const results = this.db.cronRuns
+        .filter((row) => row.job_name === jobName)
+        .sort((a, b) => (a.id < b.id ? 1 : -1))
+        .slice(0, limit ?? 50);
+      return { results: results as T[] };
+    }
+
+    throw new Error(`Unsupported all query: ${this.query}`);
   }
 }
 
@@ -135,4 +156,101 @@ describe('public routes', () => {
     expect(response.status).toBe(401);
     expect(db.cronRuns).toHaveLength(0);
   });
+
+  it('returns authenticated smoke metrics from recent cron_runs', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push(
+      {
+        id: 1,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://old-production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:00:00.000Z',
+      },
+      {
+        id: 2,
+        job_name: 'smoke',
+        status: 'failed',
+        detail: JSON.stringify({
+          ok: false,
+          target: 'https://staging.example.workers.dev',
+          environment: 'staging',
+          checks: [{ name: 'rollout_readiness', ok: false }],
+        }),
+        created_at: '2026-05-27T08:10:00.000Z',
+      },
+      {
+        id: 3,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:20:00.000Z',
+      },
+      {
+        id: 4,
+        job_name: 'cleanup',
+        status: 'failed',
+        detail: '{}',
+        created_at: '2026-05-27T08:30:00.000Z',
+      },
+    );
+    const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' }, db);
+
+    const response = await handleSmokeMetrics(new Request('https://example.com/ops/smoke-metrics', {
+      headers: { 'x-newbot-smoke-report-secret': 'report-secret' },
+    }), env);
+    const payload = await response.json() as {
+      ok: boolean;
+      metrics: {
+        total: number;
+        passed: number;
+        failed: number;
+        pass_rate: number;
+        environments: Array<{ environment: string; total: number; passed: number; failed: number; latest_status: string; latest_target: string }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(payload.metrics).toMatchObject({ total: 3, passed: 2, failed: 1, pass_rate: 0.667 });
+    expect(payload.metrics.environments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        environment: 'production',
+        total: 2,
+        passed: 2,
+        failed: 0,
+        latest_status: 'ok',
+        latest_target: 'https://production.example.workers.dev',
+      }),
+      expect.objectContaining({
+        environment: 'staging',
+        total: 1,
+        passed: 0,
+        failed: 1,
+        latest_status: 'failed',
+      }),
+    ]));
+    expect(JSON.stringify(payload)).not.toContain('old-production.example.workers.dev');
+  });
+
+  it('rejects smoke metrics without the configured report secret', async () => {
+    const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' });
+
+    const response = await handleSmokeMetrics(new Request('https://example.com/ops/smoke-metrics', {
+      headers: { 'x-newbot-smoke-report-secret': 'wrong-secret' },
+    }), env);
+
+    expect(response.status).toBe(401);
+  });
+
 });

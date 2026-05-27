@@ -426,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 30 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；/runbook production 和 runbook 环境按钮都可以只看指定环境的 smoke 状态。',
+    text: '我先记下了。现在 Phase 31 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；runbook 可以按环境看 smoke，/ops/smoke-metrics 也能输出聚合指标。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }

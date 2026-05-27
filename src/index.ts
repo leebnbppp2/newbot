@@ -3,7 +3,7 @@
  */
 
 import { TradeCoordinator } from './durable_objects/trade_coordinator';
-import { handleHealthz, handleSmokeReport, handleVersion } from './routes/public';
+import { handleHealthz, handleSmokeMetrics, handleSmokeReport, handleVersion } from './routes/public';
 import { handleLinkPortal, handleLinkPortalComplete } from './routes/portal';
 import { handleTelegramWebhook } from './routes/webhook';
 import type { Env } from './types';
@@ -24,6 +24,10 @@ export default {
 
     if (request.method === 'POST' && url.pathname === '/ops/smoke-report') {
       return handleSmokeReport(request, env);
+    }
+
+    if (request.method === 'GET' && url.pathname === '/ops/smoke-metrics') {
+      return handleSmokeMetrics(request, env);
     }
 
     const portalCompleteMatch = url.pathname.match(/^\/portal\/link\/([A-Z0-9]+)\/complete$/i);

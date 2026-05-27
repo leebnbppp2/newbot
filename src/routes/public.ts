@@ -2,6 +2,7 @@
  * Public unauthenticated routes exposed by the Worker.
  */
 
+import { getSmokeReportMetrics } from '../db/cron_runs';
 import { getOrderGatewayReadiness } from '../lib/order_gateway';
 import type { Env } from '../types';
 
@@ -49,6 +50,38 @@ export async function handleSmokeReport(request: Request, env: Env): Promise<Res
     .run();
 
   return json({ ok: true, stored: true });
+}
+
+export async function handleSmokeMetrics(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'GET') {
+    return json({ ok: false, error: 'method_not_allowed' }, 405);
+  }
+
+  const expectedSecret = env.NEWBOT_SMOKE_REPORT_SECRET?.trim();
+  const providedSecret = request.headers.get('x-newbot-smoke-report-secret')?.trim();
+  if (!expectedSecret || providedSecret !== expectedSecret) {
+    return json({ ok: false, error: 'unauthorized' }, 401);
+  }
+
+  const metrics = await getSmokeReportMetrics(env, 50);
+  return json({
+    ok: true,
+    metrics: {
+      total: metrics.total,
+      passed: metrics.passed,
+      failed: metrics.failed,
+      pass_rate: metrics.passRate,
+      environments: metrics.environments.map((environment) => ({
+        environment: environment.environment,
+        total: environment.total,
+        passed: environment.passed,
+        failed: environment.failed,
+        latest_status: environment.latestStatus,
+        latest_target: environment.latestTarget,
+        latest_created_at: environment.latestCreatedAt,
+      })),
+    },
+  });
 }
 
 function json(payload: unknown, status = 200): Response {
