@@ -291,6 +291,38 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
     return cancelOpenOrderCallbackReply(env, telegramUserId, botId, orderId, page);
   }
 
+  if (data.startsWith('ops_runbook_env:')) {
+    if (!isTelegramOperator(env, telegramUserId)) {
+      return {
+        reply: buildOperatorOnlyReply(),
+        callbackToast: { text: '只有配置过的操作者可以看灰度 runbook', showAlert: true },
+      };
+    }
+
+    const smokeEnvironment = parseRunbookCallbackEnvironment(data);
+    if (!smokeEnvironment) {
+      return {
+        reply: buildRunbookReply(
+          getOrderGatewayReadiness(env),
+          await getLatestSmokeReportRun(env),
+          await getLatestSmokeReportRunsByEnvironment(env),
+        ),
+        callbackToast: { text: '灰度 runbook 已刷新', showAlert: false },
+      };
+    }
+
+    const environmentSmokeReport = await getLatestSmokeReportRunForEnvironment(env, smokeEnvironment);
+    return {
+      reply: buildRunbookReply(
+        getOrderGatewayReadiness(env),
+        environmentSmokeReport,
+        environmentSmokeReport ? [environmentSmokeReport] : [],
+        smokeEnvironment,
+      ),
+      callbackToast: { text: `${smokeEnvironment} runbook 已刷新`, showAlert: false },
+    };
+  }
+
   switch (data) {
     case 'market_overview':
       return { reply: await getMarketOverviewReply(env), callbackToast: { text: '已切到市场概览', showAlert: false } };
@@ -569,6 +601,14 @@ function parseRunbookEnvironment(text: string): string | null {
   }
 
   const environment = parts[1]?.trim().toLowerCase() ?? '';
+  if (!/^[a-z0-9_-]{1,32}$/.test(environment)) {
+    return null;
+  }
+  return environment;
+}
+
+function parseRunbookCallbackEnvironment(data: string): string | null {
+  const environment = data.replace(/^ops_runbook_env:/, '').trim().toLowerCase();
   if (!/^[a-z0-9_-]{1,32}$/.test(environment)) {
     return null;
   }

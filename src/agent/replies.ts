@@ -426,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 29 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；/runbook production 这类命令可以只看指定环境的 smoke 状态。',
+    text: '我先记下了。现在 Phase 30 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；/runbook production 和 runbook 环境按钮都可以只看指定环境的 smoke 状态。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -468,7 +468,7 @@ export function buildRunbookReply(
     : ['暂时没有阻断项'];
   const smokeLines = buildSmokeReportLines(latestSmokeReport);
   const environmentSmokeLines = buildEnvironmentSmokeReportLines(smokeReportsByEnvironment);
-  const title = selectedEnvironment ? `Phase 29 灰度 runbook（${selectedEnvironment}）` : 'Phase 29 灰度 runbook：';
+  const title = selectedEnvironment ? `Phase 30 灰度 runbook（${selectedEnvironment}）` : 'Phase 30 灰度 runbook：';
 
   return {
     text: [
@@ -557,6 +557,11 @@ function buildOperatorMenuMarkup(): TelegramMenuMarkup {
     inline_keyboard: [
       [{ text: '系统状态', callback_data: 'ops_health' }],
       [{ text: '灰度 Runbook', callback_data: 'ops_runbook' }],
+      [
+        { text: 'Production', callback_data: 'ops_runbook_env:production' },
+        { text: 'Staging', callback_data: 'ops_runbook_env:staging' },
+        { text: 'Canary', callback_data: 'ops_runbook_env:canary' },
+      ],
       [{ text: '看市场', callback_data: 'market_overview' }],
       [{ text: '我的账户', callback_data: 'account_status' }],
     ],

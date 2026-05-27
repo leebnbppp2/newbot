@@ -1275,7 +1275,7 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string; reply_markup?: ReplyMarkup };
-    expect(payload.text).toContain('Phase 29 灰度 runbook');
+    expect(payload.text).toContain('Phase 30 灰度 runbook');
     expect(payload.text).toContain('npm run smoke -- <worker-url>');
     expect(payload.text).toContain('npm run smoke -- --require-ready <worker-url>');
     expect(payload.text).toContain('--report-url /ops/smoke-report');
@@ -1287,6 +1287,9 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ callback_data: 'ops_runbook' }),
+        expect.objectContaining({ text: 'Production', callback_data: 'ops_runbook_env:production' }),
+        expect.objectContaining({ text: 'Staging', callback_data: 'ops_runbook_env:staging' }),
+        expect.objectContaining({ text: 'Canary', callback_data: 'ops_runbook_env:canary' }),
       ]),
     );
   });
@@ -1442,13 +1445,80 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
-    expect(payload.text).toContain('Phase 29 灰度 runbook（production）');
+    expect(payload.text).toContain('Phase 30 灰度 runbook（production）');
     expect(payload.text).toContain('最近 smoke：通过');
     expect(payload.text).toContain('环境：production');
     expect(payload.text).toContain('https://production.example.workers.dev');
     expect(payload.text).toContain('- production 通过');
     expect(payload.text).not.toContain('https://canary.example.workers.dev');
     expect(payload.text).not.toContain('https://staging.example.workers.dev');
+  });
+
+  it('opens a filtered runbook from the production shortcut callback', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push(
+      {
+        id: 1,
+        job_name: 'smoke',
+        status: 'failed',
+        detail: JSON.stringify({
+          ok: false,
+          target: 'https://staging.example.workers.dev',
+          environment: 'staging',
+          checks: [{ name: 'rollout_readiness', ok: false }],
+        }),
+        created_at: '2026-05-27T08:00:00.000Z',
+      },
+      {
+        id: 2,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:30:00.000Z',
+      },
+      {
+        id: 3,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://canary.example.workers.dev',
+          environment: 'canary',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:35:00.000Z',
+      },
+    );
+    const env = makeEnv(db, {
+      NEWBOT_OPERATOR_TELEGRAM_IDS: '9001',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('ops_runbook_env:production', 9001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const editCall = fetchMock.mock.calls.find(([input]) => String(input).includes('editMessageText'));
+    expect(editCall).toBeDefined();
+    const [, editInit] = editCall as [string, RequestInit];
+    const payload = JSON.parse(String(editInit.body)) as { text: string; reply_markup?: ReplyMarkup };
+    expect(payload.text).toContain('Phase 30 灰度 runbook（production）');
+    expect(payload.text).toContain('https://production.example.workers.dev');
+    expect(payload.text).not.toContain('https://canary.example.workers.dev');
+    expect(payload.text).not.toContain('https://staging.example.workers.dev');
+    expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ callback_data: 'ops_runbook' }),
+        expect.objectContaining({ callback_data: 'ops_runbook_env:staging' }),
+      ]),
+    );
   });
 
   it('keeps the rollout runbook behind the operator allowlist', async () => {
@@ -1472,7 +1542,7 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, editInit] = editCall as [string, RequestInit];
     const payload = JSON.parse(String(editInit.body)) as { text: string };
     expect(payload.text).toContain('这个系统状态入口只给配置过的操作者使用');
-    expect(payload.text).not.toContain('Phase 29 灰度 runbook');
+    expect(payload.text).not.toContain('Phase 30 灰度 runbook');
   });
 
   it('lists recent simulated orders', async () => {
