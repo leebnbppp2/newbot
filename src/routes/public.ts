@@ -95,9 +95,10 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
 
-  const metrics = await getSmokeReportMetrics(env, 50);
-  const trend = await getSmokeReportTrend(env, 10);
-  const recentRuns = await getRecentSmokeReportRuns(env, 2);
+  const selectedEnvironment = parseEnvironmentFilter(new URL(request.url).searchParams.get('env'));
+  const metrics = await getSmokeReportMetrics(env, 50, selectedEnvironment);
+  const trend = await getSmokeReportTrend(env, 10, selectedEnvironment);
+  const recentRuns = await getRecentSmokeReportRuns(env, 2, selectedEnvironment);
   return html(`<!doctype html>
 <html lang="en">
 <head>
@@ -131,6 +132,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
   <main>
     <h1>NewBot smoke dashboard</h1>
     <p class="muted">Read-only view from recent smoke reports. Auto-refreshes every 60 seconds. Secrets are not rendered.</p>
+    ${selectedEnvironment ? `<p class="muted">Environment filter: ${escapeHtml(selectedEnvironment)}</p>` : ''}
     <section class="cards" aria-label="Smoke summary">
       <div class="card"><div class="label">Total smoke runs</div><div class="value">${metrics.total}</div></div>
       <div class="card"><div class="label">Passed</div><div class="value ok">${metrics.passed}</div></div>
@@ -211,6 +213,14 @@ function formatTrendSequence(trend: SmokeReportTrend): string {
     return 'no smoke reports yet';
   }
   return trend.runs.map((run) => (isRunOk(run) ? 'ok' : 'failed')).join(' · ');
+}
+
+function parseEnvironmentFilter(value: string | null): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || !/^[a-z0-9_-]{1,32}$/.test(normalized)) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function json(payload: unknown, status = 200): Response {

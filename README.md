@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 35：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 36：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -28,7 +28,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - Telegram runbook 增加 Production / Staging / Canary 快捷按钮，operator 可以点按钮直接切换指定环境 smoke 视图
 - `GET /ops/smoke-metrics` 认证输出最近 smoke 聚合指标，给后续 dashboard / monitoring 复用
 - Telegram 内 `/metrics` / `Smoke Metrics` 按钮可以直接查看最近 smoke 聚合指标和各环境最新状态
-- `GET /ops/smoke-dashboard` 认证输出极简 HTML smoke dashboard，复用同一份 smoke 聚合指标，并自动刷新最近 smoke 窗口与短趋势条
+- `GET /ops/smoke-dashboard` 认证输出极简 HTML smoke dashboard，复用同一份 smoke 聚合指标，并自动刷新最近 smoke 窗口与短趋势条；也支持 `?env=production` 只看单个环境
 - `NEWBOT_LIVE_TRADING_TELEGRAM_IDS` 用户级 live 交易 allowlist；不在列表里的用户即使 live API 已配置也只记录模拟单
 
 ## 5 步部署
@@ -91,7 +91,7 @@ npm run smoke -- --require-ready https://<your-worker>.workers.dev --report-url 
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 35 行为
+## 当前 Phase 36 行为
 
 - `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
   - live order API 是否完整可用
@@ -105,7 +105,7 @@ curl https://<your-worker>.workers.dev/healthz
 - `npm run smoke -- <worker-url> --report-url <url> --report-secret <secret> [--report-env production]` → smoke 完成后把结构化 JSON 报告 POST 到报告入口；报告入口只校验 `x-newbot-smoke-report-secret`，不需要 Telegram token；环境标签会保存在 report detail 里
 - `POST /ops/smoke-report` → 认证写入 smoke 报告到 `cron_runs`：`job_name=smoke`，`status=ok/failed`，`detail` 保存 smoke JSON
 - `GET /ops/smoke-metrics` → 使用 `x-newbot-smoke-report-secret` 认证读取最近 smoke 聚合：总数、通过数、失败数、通过率，以及各环境最新状态
-- `GET /ops/smoke-dashboard` → 使用同一个 report secret 认证，返回只读 HTML dashboard：总数、通过数、失败数、通过率、各环境最新 target / 状态、最近 10 次 smoke 趋势条，以及最近 2 次 smoke 运行窗口；页面每 60 秒自动刷新，不展示 secret 或认证 header
+- `GET /ops/smoke-dashboard` → 使用同一个 report secret 认证，返回只读 HTML dashboard：总数、通过数、失败数、通过率、各环境最新 target / 状态、最近 10 次 smoke 趋势条，以及最近 2 次 smoke 运行窗口；页面每 60 秒自动刷新，不展示 secret 或认证 header；可用 `?env=production` / `?env=staging` 只看单环境 summary、趋势和最近运行
 - `GET /portal/link/:token` → 返回账户连接页面，展示口令、有效期和绑定表单
 - `POST /portal/link/:token/complete` → 提交后把账户状态写入 `user_trading_accounts`，并把当前会话标记为 `linked`
 - Telegram 文本指令：
@@ -140,7 +140,7 @@ curl https://<your-worker>.workers.dev/healthz
   - `/runbook` / `/rollout` → 操作者专用灰度 runbook：先跑 `npm run smoke -- <worker-url>` 和 `npm run smoke -- --require-ready <worker-url>`；如果配置了报告 secret，也可以用 `--report-url` + `--report-env` 回传结果；runbook 会显示全局最近一次 `cron_runs` smoke 结果，并按环境列出最近状态，不展示任何 secret 原文
   - `/runbook production` / `/rollout staging` → 只看指定环境最近一次 smoke，适合上线时单独确认 production / staging / canary
   - `/metrics` / `/smoke-metrics` → 操作者专用 smoke metrics 面板：显示最近 smoke 总数、通过率、失败数，以及各环境最新 target 和状态
-  - 其他文本 → 先记录对话，再返回 Phase 35 引导文案
+  - 其他文本 → 先记录对话，再返回 Phase 36 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
@@ -161,4 +161,4 @@ curl https://<your-worker>.workers.dev/healthz
   - `user_trading_accounts` 会记录已绑定账户基础信息
   - `trade_events` 会记录 live / simulated 两类订单事件，并持续同步 live 状态；payload 里会附带 builder attribution 校验结果和 signature envelope
   - `builder_attributions` 现在会记录 builder api key hint、trade_event_id、order_id 和金额，供后续收益归因校验
-  - `cron_runs` 现在可以保存带环境标签的 smoke report，Telegram runbook 会展示全局最近一次结果、各环境最近状态，也支持按环境筛选最近一次结果；`/ops/smoke-metrics`、`/ops/smoke-dashboard` 和 Telegram `/metrics` 会从最近 smoke 记录聚合总量、通过率和各环境最新状态；dashboard 还会展示最近 10 次 smoke 趋势条和最近 2 次 smoke 运行窗口
+  - `cron_runs` 现在可以保存带环境标签的 smoke report，Telegram runbook 会展示全局最近一次结果、各环境最近状态，也支持按环境筛选最近一次结果；`/ops/smoke-metrics`、`/ops/smoke-dashboard` 和 Telegram `/metrics` 会从最近 smoke 记录聚合总量、通过率和各环境最新状态；dashboard 还会展示最近 10 次 smoke 趋势条和最近 2 次 smoke 运行窗口，并支持 `?env=` 环境过滤

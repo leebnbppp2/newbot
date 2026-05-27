@@ -329,6 +329,63 @@ describe('public routes', () => {
     expect(html).not.toContain('cleanup.example');
   });
 
+  it('filters the smoke dashboard by environment query parameter', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push(
+      {
+        id: 1,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://old-production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:00:00.000Z',
+      },
+      {
+        id: 2,
+        job_name: 'smoke',
+        status: 'failed',
+        detail: JSON.stringify({
+          ok: false,
+          target: 'https://staging.example.workers.dev',
+          environment: 'staging',
+          checks: [{ name: 'rollout_readiness', ok: false }],
+        }),
+        created_at: '2026-05-27T08:10:00.000Z',
+      },
+      {
+        id: 3,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:20:00.000Z',
+      },
+    );
+    const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' }, db);
+
+    const response = await handleSmokeDashboard(new Request('https://example.com/ops/smoke-dashboard?env=production', {
+      headers: { 'x-newbot-smoke-report-secret': 'report-secret' },
+    }), env);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('Environment filter: production');
+    expect(html).toContain('Total smoke runs');
+    expect(html).toContain('100.0%');
+    expect(html).toContain('ok · ok');
+    expect(html).toContain('https://production.example.workers.dev');
+    expect(html).toContain('https://old-production.example.workers.dev');
+    expect(html).not.toContain('staging.example.workers.dev');
+  });
+
   it('rejects smoke dashboard without the configured report secret', async () => {
     const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' });
 

@@ -83,8 +83,8 @@ export async function getLatestSmokeReportRunForEnvironment(env: Env, environmen
   return runs.find((run) => run.detail?.environment?.toLowerCase() === expectedEnvironment) ?? null;
 }
 
-export async function getSmokeReportMetrics(env: Env, limit = 50): Promise<SmokeReportMetrics> {
-  const runs = await listRecentSmokeReportRuns(env, limit);
+export async function getSmokeReportMetrics(env: Env, limit = 50, environment?: string): Promise<SmokeReportMetrics> {
+  const runs = await listRecentSmokeReportRuns(env, limit, environment);
   const passed = runs.filter((run) => run.detail?.ok === true || run.status === 'ok').length;
   const failed = runs.length - passed;
   const environmentMap = new Map<string, SmokeReportEnvironmentMetrics>();
@@ -127,12 +127,12 @@ export async function getSmokeReportMetrics(env: Env, limit = 50): Promise<Smoke
   };
 }
 
-export async function getRecentSmokeReportRuns(env: Env, limit = 2): Promise<SmokeReportRun[]> {
-  return listRecentSmokeReportRuns(env, limit);
+export async function getRecentSmokeReportRuns(env: Env, limit = 2, environment?: string): Promise<SmokeReportRun[]> {
+  return listRecentSmokeReportRuns(env, limit, environment);
 }
 
-export async function getSmokeReportTrend(env: Env, limit = 10): Promise<SmokeReportTrend> {
-  const runs = await listRecentSmokeReportRuns(env, limit);
+export async function getSmokeReportTrend(env: Env, limit = 10, environment?: string): Promise<SmokeReportTrend> {
+  const runs = await listRecentSmokeReportRuns(env, limit, environment);
   const passed = runs.filter((run) => run.detail?.ok === true || run.status === 'ok').length;
   const failed = runs.length - passed;
   return {
@@ -144,7 +144,9 @@ export async function getSmokeReportTrend(env: Env, limit = 10): Promise<SmokeRe
   };
 }
 
-async function listRecentSmokeReportRuns(env: Env, limit: number): Promise<SmokeReportRun[]> {
+async function listRecentSmokeReportRuns(env: Env, limit: number, environment?: string): Promise<SmokeReportRun[]> {
+  const environmentFilter = environment?.trim().toLowerCase();
+  const queryLimit = environmentFilter ? Math.max(limit, 50) : limit;
   const { results } = await env.DB.prepare(
     `SELECT id, job_name, status, detail, created_at
      FROM cron_runs
@@ -152,14 +154,21 @@ async function listRecentSmokeReportRuns(env: Env, limit: number): Promise<Smoke
      ORDER BY id DESC
      LIMIT ?`,
   )
-    .bind('smoke', limit)
+    .bind('smoke', queryLimit)
     .all<CronRunRow>();
 
-  return results.map((row) => ({
+  const runs = results.map((row) => ({
     status: row.status,
     createdAt: row.created_at,
     detail: parseSmokeReportDetail(row.detail),
   }));
+
+  if (!environmentFilter) {
+    return runs;
+  }
+  return runs
+    .filter((run) => run.detail?.environment?.toLowerCase() === environmentFilter)
+    .slice(0, limit);
 }
 
 function parseSmokeReportDetail(value: string | null): SmokeReportDetail | null {
