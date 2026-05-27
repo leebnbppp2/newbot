@@ -2,7 +2,7 @@
  * Public unauthenticated routes exposed by the Worker.
  */
 
-import { getRecentSmokeReportRuns, getSmokeReportMetrics, type SmokeReportRun } from '../db/cron_runs';
+import { getRecentSmokeReportRuns, getSmokeReportMetrics, getSmokeReportTrend, type SmokeReportRun, type SmokeReportTrend } from '../db/cron_runs';
 import { getOrderGatewayReadiness } from '../lib/order_gateway';
 import type { Env } from '../types';
 
@@ -96,6 +96,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
   }
 
   const metrics = await getSmokeReportMetrics(env, 50);
+  const trend = await getSmokeReportTrend(env, 10);
   const recentRuns = await getRecentSmokeReportRuns(env, 2);
   return html(`<!doctype html>
 <html lang="en">
@@ -122,6 +123,8 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     a { color: #93c5fd; overflow-wrap: anywhere; }
     .ok { color: #86efac; }
     .failed { color: #fca5a5; }
+    .trend { background: #111827; border: 1px solid #334155; border-radius: 14px; padding: 16px; margin: 24px 0; }
+    .sequence { margin-top: 8px; font-weight: 700; letter-spacing: 0.02em; }
   </style>
 </head>
 <body>
@@ -149,6 +152,12 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
         </tr>`).join('')}
       </tbody>
     </table>
+    <section class="trend" aria-label="Smoke trend">
+      <h2>Smoke trend (last 10)</h2>
+      <p class="muted">Newest first, based on the latest ${trend.total} smoke reports.</p>
+      <div>Trend pass rate: ${formatPercent(trend.passRate)} (${trend.passed} passed / ${trend.failed} failed)</div>
+      <div class="sequence">${escapeHtml(formatTrendSequence(trend))}</div>
+    </section>
     <h2>Recent smoke runs</h2>
     <table>
       <thead><tr><th>Created</th><th>Environment</th><th>Status</th><th>Target</th><th>Checks</th></tr></thead>
@@ -195,6 +204,13 @@ function formatRunChecks(run: SmokeReportRun): string {
     .slice(0, 3)
     .map((check) => `${check.name} ${check.ok ? 'ok' : 'failed'}`)
     .join(', ');
+}
+
+function formatTrendSequence(trend: SmokeReportTrend): string {
+  if (trend.runs.length === 0) {
+    return 'no smoke reports yet';
+  }
+  return trend.runs.map((run) => (isRunOk(run) ? 'ok' : 'failed')).join(' · ');
 }
 
 function json(payload: unknown, status = 200): Response {

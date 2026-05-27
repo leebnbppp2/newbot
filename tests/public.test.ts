@@ -320,6 +320,9 @@ describe('public routes', () => {
     expect(html).toContain('https://production.example.workers.dev');
     expect(html).toContain('staging');
     expect(html).toContain('https://staging.example.workers.dev?note=&lt;bad&gt;');
+    expect(html).toContain('Smoke trend (last 10)');
+    expect(html).toContain('Trend pass rate');
+    expect(html).toContain('ok · failed · ok');
     expect(html).toContain('Recent smoke runs');
     expect(html).toContain('rollout_readiness failed');
     expect(html).not.toContain('old-production.example');

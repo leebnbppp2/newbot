@@ -45,6 +45,14 @@ export interface SmokeReportMetrics {
   environments: SmokeReportEnvironmentMetrics[];
 }
 
+export interface SmokeReportTrend {
+  total: number;
+  passed: number;
+  failed: number;
+  passRate: number;
+  runs: SmokeReportRun[];
+}
+
 export async function getLatestSmokeReportRun(env: Env): Promise<SmokeReportRun | null> {
   const runs = await listRecentSmokeReportRuns(env, 1);
   return runs[0] ?? null;
@@ -121,6 +129,19 @@ export async function getSmokeReportMetrics(env: Env, limit = 50): Promise<Smoke
 
 export async function getRecentSmokeReportRuns(env: Env, limit = 2): Promise<SmokeReportRun[]> {
   return listRecentSmokeReportRuns(env, limit);
+}
+
+export async function getSmokeReportTrend(env: Env, limit = 10): Promise<SmokeReportTrend> {
+  const runs = await listRecentSmokeReportRuns(env, limit);
+  const passed = runs.filter((run) => run.detail?.ok === true || run.status === 'ok').length;
+  const failed = runs.length - passed;
+  return {
+    total: runs.length,
+    passed,
+    failed,
+    passRate: runs.length > 0 ? roundToThree(passed / runs.length) : 0,
+    runs,
+  };
 }
 
 async function listRecentSmokeReportRuns(env: Env, limit: number): Promise<SmokeReportRun[]> {
