@@ -22,7 +22,7 @@ import {
 } from '../agent/replies';
 import { createAccountLinkSession } from '../db/account_sessions';
 import { createBuilderAttribution } from '../db/builder_attributions';
-import { getLatestSmokeReportRun } from '../db/cron_runs';
+import { getLatestSmokeReportRun, getLatestSmokeReportRunsByEnvironment } from '../db/cron_runs';
 import { appendConversationTurn } from '../db/conversations';
 import {
   createTradeEvent,
@@ -165,7 +165,11 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     if (!isTelegramOperator(env, telegramUserId)) {
       return buildOperatorOnlyReply();
     }
-    return buildRunbookReply(getOrderGatewayReadiness(env), await getLatestSmokeReportRun(env));
+    return buildRunbookReply(
+      getOrderGatewayReadiness(env),
+      await getLatestSmokeReportRun(env),
+      await getLatestSmokeReportRunsByEnvironment(env),
+    );
   }
 
   if (normalized === '/link') {
@@ -296,7 +300,11 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
         };
       }
       return {
-        reply: buildRunbookReply(getOrderGatewayReadiness(env), await getLatestSmokeReportRun(env)),
+        reply: buildRunbookReply(
+          getOrderGatewayReadiness(env),
+          await getLatestSmokeReportRun(env),
+          await getLatestSmokeReportRunsByEnvironment(env),
+        ),
         callbackToast: { text: '灰度 runbook 已刷新', showAlert: false },
       };
     case 'getting_started':

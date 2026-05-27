@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 27：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 28：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -23,6 +23,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - `POST /ops/smoke-report` 认证写入 smoke 报告到 `cron_runs`，让部署后 smoke 结果开始有持久化落点
 - Telegram 内 `/runbook` / `/rollout` 灰度 runbook 面板，会读取最近一次 `cron_runs` smoke 报告并展示状态
 - smoke report 支持 `--report-env` / `SMOKE_REPORT_ENV` 环境标签，runbook 会显示最近一次 smoke 属于 production / staging / canary 等哪个环境
+- Telegram runbook 现在会按环境汇总最近 smoke，列出 production / staging / canary 等各自最新状态，避免全局最近一条遮住其他环境
 - `NEWBOT_LIVE_TRADING_TELEGRAM_IDS` 用户级 live 交易 allowlist；不在列表里的用户即使 live API 已配置也只记录模拟单
 
 ## 5 步部署
@@ -85,7 +86,7 @@ npm run smoke -- --require-ready https://<your-worker>.workers.dev --report-url 
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 27 行为
+## 当前 Phase 28 行为
 
 - `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
   - live order API 是否完整可用
@@ -129,8 +130,8 @@ curl https://<your-worker>.workers.dev/healthz
   - `/fills` / `/fills 2` → 返回远端最近成交记录，并支持基础分页；如果是缓存回退也会直接提示
   - `/cancel <orderId>` → 对 live 订单发撤单请求；如果有 signing secret，撤单请求也会附带同一套 canonical signature headers
   - `/health` / `/ops` / `/readiness` → 在 Telegram 里直接查看 live order API、canonical signing、Builder attribution、live trading allowlist 和当前配置 warning；如果配置了 `NEWBOT_OPERATOR_TELEGRAM_IDS`，只有白名单里的 Telegram user id 可以查看
-  - `/runbook` / `/rollout` → 操作者专用灰度 runbook：先跑 `npm run smoke -- <worker-url>` 和 `npm run smoke -- --require-ready <worker-url>`；如果配置了报告 secret，也可以用 `--report-url` + `--report-env` 回传结果；runbook 会显示最近一次 `cron_runs` smoke 结果和环境标签，不展示任何 secret 原文
-  - 其他文本 → 先记录对话，再返回 Phase 27 引导文案
+  - `/runbook` / `/rollout` → 操作者专用灰度 runbook：先跑 `npm run smoke -- <worker-url>` 和 `npm run smoke -- --require-ready <worker-url>`；如果配置了报告 secret，也可以用 `--report-url` + `--report-env` 回传结果；runbook 会显示全局最近一次 `cron_runs` smoke 结果，并按环境列出最近状态，不展示任何 secret 原文
+  - 其他文本 → 先记录对话，再返回 Phase 28 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
@@ -149,4 +150,4 @@ curl https://<your-worker>.workers.dev/healthz
   - `user_trading_accounts` 会记录已绑定账户基础信息
   - `trade_events` 会记录 live / simulated 两类订单事件，并持续同步 live 状态；payload 里会附带 builder attribution 校验结果和 signature envelope
   - `builder_attributions` 现在会记录 builder api key hint、trade_event_id、order_id 和金额，供后续收益归因校验
-  - `cron_runs` 现在可以保存带环境标签的 smoke report，供后续 Telegram runbook 展示最近一次 smoke 结果
+  - `cron_runs` 现在可以保存带环境标签的 smoke report，Telegram runbook 会展示全局最近一次结果和各环境最近状态

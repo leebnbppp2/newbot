@@ -426,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 27 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；smoke 回传可以带环境标签，runbook 会显示最近一次结果。',
+    text: '我先记下了。现在 Phase 28 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；runbook 会显示全局最近 smoke，也会列出各环境最近状态。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -457,20 +457,26 @@ export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
   };
 }
 
-export function buildRunbookReply(readiness: OrderGatewayReadiness, latestSmokeReport?: SmokeReportRun | null): BotReply {
+export function buildRunbookReply(
+  readiness: OrderGatewayReadiness,
+  latestSmokeReport?: SmokeReportRun | null,
+  smokeReportsByEnvironment: SmokeReportRun[] = [],
+): BotReply {
   const blockers = readiness.warnings.length > 0
     ? readiness.warnings.map((warning) => `- ${warning}`)
     : ['暂时没有阻断项'];
   const smokeLines = buildSmokeReportLines(latestSmokeReport);
+  const environmentSmokeLines = buildEnvironmentSmokeReportLines(smokeReportsByEnvironment);
 
   return {
     text: [
-      'Phase 27 灰度 runbook：',
+      'Phase 28 灰度 runbook：',
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,
       `Live trading allowlist：${readiness.liveTradingAllowlist ? '已启用' : '未启用'}`,
       ...smokeLines,
+      ...environmentSmokeLines,
       '上线前：',
       '- npm run smoke -- <worker-url>',
       '- npm run smoke -- --require-ready <worker-url>',
@@ -511,6 +517,26 @@ function buildSmokeReportLines(report?: SmokeReportRun | null): string[] {
     `时间：${report.createdAt}`,
     ...checkLines,
   ];
+}
+
+function buildEnvironmentSmokeReportLines(reports: SmokeReportRun[]): string[] {
+  const lines = reports
+    .filter((report) => report.detail?.environment)
+    .map((report) => {
+      const detail = report.detail;
+      if (!detail?.environment) {
+        return null;
+      }
+      const status = detail.ok ? '通过' : '失败';
+      return `- ${detail.environment} ${status}：${detail.target}（${report.createdAt}）`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  if (lines.length === 0) {
+    return [];
+  }
+
+  return ['各环境 smoke：', ...lines];
 }
 
 export function buildMainMenuMarkup(): TelegramMenuMarkup {

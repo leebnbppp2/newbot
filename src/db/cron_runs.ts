@@ -28,26 +28,41 @@ export interface SmokeReportRun {
 }
 
 export async function getLatestSmokeReportRun(env: Env): Promise<SmokeReportRun | null> {
+  const runs = await listRecentSmokeReportRuns(env, 1);
+  return runs[0] ?? null;
+}
+
+export async function getLatestSmokeReportRunsByEnvironment(env: Env): Promise<SmokeReportRun[]> {
+  const runs = await listRecentSmokeReportRuns(env, 20);
+  const seen = new Set<string>();
+  const results: SmokeReportRun[] = [];
+  for (const run of runs) {
+    const environment = run.detail?.environment;
+    if (!environment || seen.has(environment)) {
+      continue;
+    }
+    seen.add(environment);
+    results.push(run);
+  }
+  return results.slice(0, 5);
+}
+
+async function listRecentSmokeReportRuns(env: Env, limit: number): Promise<SmokeReportRun[]> {
   const { results } = await env.DB.prepare(
     `SELECT id, job_name, status, detail, created_at
      FROM cron_runs
      WHERE job_name = ?
      ORDER BY id DESC
-     LIMIT 1`,
+     LIMIT ?`,
   )
-    .bind('smoke')
+    .bind('smoke', limit)
     .all<CronRunRow>();
 
-  const row = results[0];
-  if (!row) {
-    return null;
-  }
-
-  return {
+  return results.map((row) => ({
     status: row.status,
     createdAt: row.created_at,
     detail: parseSmokeReportDetail(row.detail),
-  };
+  }));
 }
 
 function parseSmokeReportDetail(value: string | null): SmokeReportDetail | null {
