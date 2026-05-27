@@ -1,7 +1,7 @@
 /**
  * Phase 17 reply builders.
  */
-import type { SmokeReportRun } from '../db/cron_runs';
+import type { SmokeReportMetrics, SmokeReportRun } from '../db/cron_runs';
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
 import type { OrderGatewayReadiness, RemoteDataSource } from '../lib/order_gateway';
@@ -426,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 31 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；runbook 可以按环境看 smoke，/ops/smoke-metrics 也能输出聚合指标。',
+    text: '我先记下了。现在 Phase 32 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook、/metrics；Telegram 里也能看 smoke 聚合指标。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -452,6 +452,28 @@ export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
       `Live trading allowlist：${readiness.liveTradingAllowlist ? '已启用' : '未启用'}`,
       '配置提示：',
       ...warningLines,
+    ].join('\n'),
+    replyMarkup: buildOperatorMenuMarkup(),
+  };
+}
+
+export function buildSmokeMetricsReply(metrics: SmokeReportMetrics): BotReply {
+  const environmentLines = metrics.environments.length > 0
+    ? metrics.environments.map((environment) => {
+      const latestStatus = environment.latestStatus === 'ok' ? '通过' : '失败';
+      return `- ${environment.environment}：${environment.total} 次 / 通过 ${environment.passed} / 失败 ${environment.failed} / 最新${latestStatus}\n  ${environment.latestTarget}（${environment.latestCreatedAt}）`;
+    })
+    : ['还没有带环境标签的 smoke 记录'];
+
+  return {
+    text: [
+      'Phase 32 smoke metrics：',
+      `最近 smoke：${metrics.total} 次`,
+      `通过：${metrics.passed}`,
+      `失败：${metrics.failed}`,
+      `通过率：${formatPercentage(metrics.passRate)}`,
+      '各环境：',
+      ...environmentLines,
     ].join('\n'),
     replyMarkup: buildOperatorMenuMarkup(),
   };
@@ -557,6 +579,7 @@ function buildOperatorMenuMarkup(): TelegramMenuMarkup {
     inline_keyboard: [
       [{ text: '系统状态', callback_data: 'ops_health' }],
       [{ text: '灰度 Runbook', callback_data: 'ops_runbook' }],
+      [{ text: 'Smoke Metrics', callback_data: 'ops_smoke_metrics' }],
       [
         { text: 'Production', callback_data: 'ops_runbook_env:production' },
         { text: 'Staging', callback_data: 'ops_runbook_env:staging' },
@@ -579,6 +602,10 @@ function formatUsd(value: number): string {
     return `$${(value / 1_000).toFixed(0)}K`;
   }
   return `$${value.toFixed(0)}`;
+}
+
+function formatPercentage(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 function shortenAddress(value: string): string {

@@ -16,6 +16,7 @@ import {
   buildPositionsReply,
   buildRemotePositionsReply,
   buildRunbookReply,
+  buildSmokeMetricsReply,
   buildStartReply,
   buildSubmittedBuyReply,
   buildTradeEntryReply,
@@ -26,6 +27,7 @@ import {
   getLatestSmokeReportRun,
   getLatestSmokeReportRunForEnvironment,
   getLatestSmokeReportRunsByEnvironment,
+  getSmokeReportMetrics,
 } from '../db/cron_runs';
 import { appendConversationTurn } from '../db/conversations';
 import {
@@ -163,6 +165,13 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
       return buildOperatorOnlyReply();
     }
     return buildHealthReply(getOrderGatewayReadiness(env));
+  }
+
+  if (normalized === '/metrics' || normalized === '/smoke-metrics') {
+    if (!isTelegramOperator(env, telegramUserId)) {
+      return buildOperatorOnlyReply();
+    }
+    return buildSmokeMetricsReply(await getSmokeReportMetrics(env));
   }
 
   if (normalized.startsWith('/runbook') || normalized.startsWith('/rollout')) {
@@ -338,6 +347,17 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
         };
       }
       return { reply: buildHealthReply(getOrderGatewayReadiness(env)), callbackToast: { text: '系统状态已刷新', showAlert: false } };
+    case 'ops_smoke_metrics':
+      if (!isTelegramOperator(env, telegramUserId)) {
+        return {
+          reply: buildOperatorOnlyReply(),
+          callbackToast: { text: '只有配置过的操作者可以看 smoke metrics', showAlert: true },
+        };
+      }
+      return {
+        reply: buildSmokeMetricsReply(await getSmokeReportMetrics(env)),
+        callbackToast: { text: 'Smoke metrics 已刷新', showAlert: false },
+      };
     case 'ops_runbook':
       if (!isTelegramOperator(env, telegramUserId)) {
         return {

@@ -1521,6 +1521,132 @@ describe('handleTelegramWebhook phase 6', () => {
     );
   });
 
+  it('shows smoke metrics in a Telegram operator panel', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push(
+      {
+        id: 1,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://old-production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:00:00.000Z',
+      },
+      {
+        id: 2,
+        job_name: 'cleanup',
+        status: 'failed',
+        detail: JSON.stringify({ ok: false, target: 'https://cleanup.example', checks: [] }),
+        created_at: '2026-05-27T08:05:00.000Z',
+      },
+      {
+        id: 3,
+        job_name: 'smoke',
+        status: 'failed',
+        detail: JSON.stringify({
+          ok: false,
+          target: 'https://staging.example.workers.dev',
+          environment: 'staging',
+          checks: [{ name: 'rollout_readiness', ok: false }],
+        }),
+        created_at: '2026-05-27T08:10:00.000Z',
+      },
+      {
+        id: 4,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:20:00.000Z',
+      },
+    );
+    const env = makeEnv(db, { NEWBOT_OPERATOR_TELEGRAM_IDS: '9001' });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/metrics', 9001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string; reply_markup?: ReplyMarkup };
+    expect(payload.text).toContain('Phase 32 smoke metrics');
+    expect(payload.text).toContain('最近 smoke：3 次');
+    expect(payload.text).toContain('通过：2');
+    expect(payload.text).toContain('失败：1');
+    expect(payload.text).toContain('通过率：66.7%');
+    expect(payload.text).toContain('- production：2 次 / 通过 2 / 失败 0 / 最新通过');
+    expect(payload.text).toContain('https://production.example.workers.dev');
+    expect(payload.text).toContain('- staging：1 次 / 通过 0 / 失败 1 / 最新失败');
+    expect(payload.text).not.toContain('old-production.example');
+    expect(payload.text).not.toContain('cleanup.example');
+    expect(payload.reply_markup?.inline_keyboard.flat()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ callback_data: 'ops_smoke_metrics' }),
+      ]),
+    );
+  });
+
+  it('refreshes smoke metrics from an operator callback', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push({
+      id: 1,
+      job_name: 'smoke',
+      status: 'failed',
+      detail: JSON.stringify({
+        ok: false,
+        target: 'https://canary.example.workers.dev',
+        environment: 'canary',
+        checks: [{ name: 'healthz', ok: false }],
+      }),
+      created_at: '2026-05-27T08:00:00.000Z',
+    });
+    const env = makeEnv(db, { NEWBOT_OPERATOR_TELEGRAM_IDS: '9001' });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeCallbackRequest('ops_smoke_metrics', 9001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const answerCall = fetchMock.mock.calls.find(([input]) => String(input).includes('answerCallbackQuery'));
+    expect(answerCall).toBeDefined();
+    const [, answerInit] = answerCall as [string, RequestInit];
+    expect(JSON.parse(String(answerInit.body))).toMatchObject({ text: 'Smoke metrics 已刷新', show_alert: false });
+    const editCall = fetchMock.mock.calls.find(([input]) => String(input).includes('editMessageText'));
+    expect(editCall).toBeDefined();
+    const [, editInit] = editCall as [string, RequestInit];
+    const payload = JSON.parse(String(editInit.body)) as { text: string };
+    expect(payload.text).toContain('Phase 32 smoke metrics');
+    expect(payload.text).toContain('最近 smoke：1 次');
+    expect(payload.text).toContain('- canary：1 次 / 通过 0 / 失败 1 / 最新失败');
+  });
+
+  it('keeps Telegram smoke metrics behind the operator allowlist', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push({
+      id: 1,
+      job_name: 'smoke',
+      status: 'ok',
+      detail: JSON.stringify({ ok: true, target: 'https://production.example.workers.dev', environment: 'production', checks: [] }),
+      created_at: '2026-05-27T08:00:00.000Z',
+    });
+    const env = makeEnv(db, { NEWBOT_OPERATOR_TELEGRAM_IDS: '9001' });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/metrics', 1001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('这个系统状态入口只给配置过的操作者使用');
+    expect(payload.text).not.toContain('production.example.workers.dev');
+  });
+
   it('keeps the rollout runbook behind the operator allowlist', async () => {
     const db = new FakeD1();
     const env = makeEnv(db, {

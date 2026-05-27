@@ -1,6 +1,6 @@
 # NewBot
 
-NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 31：
+NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot。当前目标已经推进到 Phase 32：
 - D1 schema
 - `/healthz` / `/version`
 - `/telegram/webhook/:persona_id`
@@ -27,6 +27,7 @@ NewBot 是一个部署在 Cloudflare Workers 上的 AI Polymarket Telegram Bot�
 - `/runbook production` / `/rollout staging` 这类命令可以只看指定环境的最近 smoke 状态，方便上线时单独检查 production / staging / canary
 - Telegram runbook 增加 Production / Staging / Canary 快捷按钮，operator 可以点按钮直接切换指定环境 smoke 视图
 - `GET /ops/smoke-metrics` 认证输出最近 smoke 聚合指标，给后续 dashboard / monitoring 复用
+- Telegram 内 `/metrics` / `Smoke Metrics` 按钮可以直接查看最近 smoke 聚合指标和各环境最新状态
 - `NEWBOT_LIVE_TRADING_TELEGRAM_IDS` 用户级 live 交易 allowlist；不在列表里的用户即使 live API 已配置也只记录模拟单
 
 ## 5 步部署
@@ -89,7 +90,7 @@ npm run smoke -- --require-ready https://<your-worker>.workers.dev --report-url 
 curl https://<your-worker>.workers.dev/healthz
 ```
 
-## 当前 Phase 31 行为
+## 当前 Phase 32 行为
 
 - `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
   - live order API 是否完整可用
@@ -136,12 +137,14 @@ curl https://<your-worker>.workers.dev/healthz
   - `/health` / `/ops` / `/readiness` → 在 Telegram 里直接查看 live order API、canonical signing、Builder attribution、live trading allowlist 和当前配置 warning；如果配置了 `NEWBOT_OPERATOR_TELEGRAM_IDS`，只有白名单里的 Telegram user id 可以查看
   - `/runbook` / `/rollout` → 操作者专用灰度 runbook：先跑 `npm run smoke -- <worker-url>` 和 `npm run smoke -- --require-ready <worker-url>`；如果配置了报告 secret，也可以用 `--report-url` + `--report-env` 回传结果；runbook 会显示全局最近一次 `cron_runs` smoke 结果，并按环境列出最近状态，不展示任何 secret 原文
   - `/runbook production` / `/rollout staging` → 只看指定环境最近一次 smoke，适合上线时单独确认 production / staging / canary
-  - 其他文本 → 先记录对话，再返回 Phase 31 引导文案
+  - `/metrics` / `/smoke-metrics` → 操作者专用 smoke metrics 面板：显示最近 smoke 总数、通过率、失败数，以及各环境最新 target 和状态
+  - 其他文本 → 先记录对话，再返回 Phase 32 引导文案
 - Telegram 菜单 / callback 按钮：
   - `看市场` → callback 后直接刷新成市场概览
   - `我的账户` → callback 后直接刷新成账户状态
   - `系统状态` → callback 后原地刷新 readiness，并给出简短“系统状态已刷新”提示；如果配置了操作者白名单，非操作者会收到 alert 提示，不展示内部 readiness
   - `灰度 Runbook` → callback 后原地刷新灰度 runbook；同样受 `NEWBOT_OPERATOR_TELEGRAM_IDS` 保护
+  - `Smoke Metrics` → callback 后原地刷新 smoke 聚合指标；同样受 `NEWBOT_OPERATOR_TELEGRAM_IDS` 保护
   - `Production` / `Staging` / `Canary` → callback 后原地切到对应环境的 runbook smoke 状态；同样受 operator allowlist 保护
   - `怎么开始` → callback 后直接刷新成开始指引
   - `开始绑定` → callback 后创建绑定口令
@@ -156,4 +159,4 @@ curl https://<your-worker>.workers.dev/healthz
   - `user_trading_accounts` 会记录已绑定账户基础信息
   - `trade_events` 会记录 live / simulated 两类订单事件，并持续同步 live 状态；payload 里会附带 builder attribution 校验结果和 signature envelope
   - `builder_attributions` 现在会记录 builder api key hint、trade_event_id、order_id 和金额，供后续收益归因校验
-  - `cron_runs` 现在可以保存带环境标签的 smoke report，Telegram runbook 会展示全局最近一次结果、各环境最近状态，也支持按环境筛选最近一次结果；`/ops/smoke-metrics` 会从最近 smoke 记录聚合总量、通过率和各环境最新状态
+  - `cron_runs` 现在可以保存带环境标签的 smoke report，Telegram runbook 会展示全局最近一次结果、各环境最近状态，也支持按环境筛选最近一次结果；`/ops/smoke-metrics` 和 Telegram `/metrics` 会从最近 smoke 记录聚合总量、通过率和各环境最新状态
