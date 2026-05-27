@@ -84,9 +84,97 @@ export async function handleSmokeMetrics(request: Request, env: Env): Promise<Re
   });
 }
 
+export async function handleSmokeDashboard(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'GET') {
+    return json({ ok: false, error: 'method_not_allowed' }, 405);
+  }
+
+  const expectedSecret = env.NEWBOT_SMOKE_REPORT_SECRET?.trim();
+  const providedSecret = request.headers.get('x-newbot-smoke-report-secret')?.trim();
+  if (!expectedSecret || providedSecret !== expectedSecret) {
+    return json({ ok: false, error: 'unauthorized' }, 401);
+  }
+
+  const metrics = await getSmokeReportMetrics(env, 50);
+  return html(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NewBot smoke dashboard</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
+    body { margin: 0; padding: 32px; }
+    main { max-width: 960px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .muted { color: #94a3b8; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 24px 0; }
+    .card, table { background: #111827; border: 1px solid #334155; border-radius: 14px; }
+    .card { padding: 16px; }
+    .label { color: #94a3b8; font-size: 13px; }
+    .value { margin-top: 6px; font-size: 26px; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid #334155; text-align: left; vertical-align: top; }
+    th { color: #cbd5e1; font-size: 13px; }
+    tr:last-child td { border-bottom: 0; }
+    a { color: #93c5fd; overflow-wrap: anywhere; }
+    .ok { color: #86efac; }
+    .failed { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>NewBot smoke dashboard</h1>
+    <p class="muted">Read-only view from recent smoke reports. Secrets are not rendered.</p>
+    <section class="cards" aria-label="Smoke summary">
+      <div class="card"><div class="label">Total smoke runs</div><div class="value">${metrics.total}</div></div>
+      <div class="card"><div class="label">Passed</div><div class="value ok">${metrics.passed}</div></div>
+      <div class="card"><div class="label">Failed</div><div class="value failed">${metrics.failed}</div></div>
+      <div class="card"><div class="label">Pass rate</div><div class="value">${formatPercent(metrics.passRate)}</div></div>
+    </section>
+    <h2>Environments</h2>
+    <table>
+      <thead><tr><th>Environment</th><th>Runs</th><th>Passed</th><th>Failed</th><th>Latest</th><th>Target</th><th>Updated</th></tr></thead>
+      <tbody>
+        ${metrics.environments.map((environment) => `<tr>
+          <td>${escapeHtml(environment.environment)}</td>
+          <td>${environment.total}</td>
+          <td class="ok">${environment.passed}</td>
+          <td class="failed">${environment.failed}</td>
+          <td class="${environment.latestStatus === 'ok' ? 'ok' : 'failed'}">${escapeHtml(environment.latestStatus)}</td>
+          <td><a href="${escapeHtml(environment.latestTarget)}">${escapeHtml(environment.latestTarget)}</a></td>
+          <td>${escapeHtml(environment.latestCreatedAt)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>`);
+}
+
+function html(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+  });
+}
+
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

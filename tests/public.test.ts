@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { handleHealthz, handleSmokeMetrics, handleSmokeReport, handleVersion } from '../src/routes/public';
+import { handleHealthz, handleSmokeDashboard, handleSmokeMetrics, handleSmokeReport, handleVersion } from '../src/routes/public';
 import type { Env } from '../src/types';
 
 type CronRunRow = {
@@ -247,6 +247,85 @@ describe('public routes', () => {
     const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' });
 
     const response = await handleSmokeMetrics(new Request('https://example.com/ops/smoke-metrics', {
+      headers: { 'x-newbot-smoke-report-secret': 'wrong-secret' },
+    }), env);
+
+    expect(response.status).toBe(401);
+  });
+
+  it('returns an authenticated smoke dashboard as minimal HTML', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push(
+      {
+        id: 1,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://old-production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:00:00.000Z',
+      },
+      {
+        id: 2,
+        job_name: 'cleanup',
+        status: 'failed',
+        detail: JSON.stringify({ ok: false, target: 'https://cleanup.example', checks: [] }),
+        created_at: '2026-05-27T08:05:00.000Z',
+      },
+      {
+        id: 3,
+        job_name: 'smoke',
+        status: 'failed',
+        detail: JSON.stringify({
+          ok: false,
+          target: 'https://staging.example.workers.dev?note=<bad>',
+          environment: 'staging',
+          checks: [{ name: 'rollout_readiness', ok: false }],
+        }),
+        created_at: '2026-05-27T08:10:00.000Z',
+      },
+      {
+        id: 4,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://production.example.workers.dev',
+          environment: 'production',
+          checks: [{ name: 'healthz', ok: true }],
+        }),
+        created_at: '2026-05-27T08:20:00.000Z',
+      },
+    );
+    const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' }, db);
+
+    const response = await handleSmokeDashboard(new Request('https://example.com/ops/smoke-dashboard', {
+      headers: { 'x-newbot-smoke-report-secret': 'report-secret' },
+    }), env);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(html).toContain('NewBot smoke dashboard');
+    expect(html).toContain('Total smoke runs');
+    expect(html).toContain('3');
+    expect(html).toContain('Pass rate');
+    expect(html).toContain('66.7%');
+    expect(html).toContain('production');
+    expect(html).toContain('https://production.example.workers.dev');
+    expect(html).toContain('staging');
+    expect(html).toContain('https://staging.example.workers.dev?note=&lt;bad&gt;');
+    expect(html).not.toContain('old-production.example');
+    expect(html).not.toContain('cleanup.example');
+  });
+
+  it('rejects smoke dashboard without the configured report secret', async () => {
+    const env = makeEnv({ NEWBOT_SMOKE_REPORT_SECRET: 'report-secret' });
+
+    const response = await handleSmokeDashboard(new Request('https://example.com/ops/smoke-dashboard', {
       headers: { 'x-newbot-smoke-report-secret': 'wrong-secret' },
     }), env);
 
