@@ -112,6 +112,9 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     main { max-width: 960px; margin: 0 auto; }
     h1 { margin: 0 0 8px; font-size: 28px; }
     .muted { color: #94a3b8; }
+    .env-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 8px; }
+    .env-nav a { border: 1px solid #334155; border-radius: 999px; padding: 7px 12px; background: #111827; color: #cbd5e1; text-decoration: none; }
+    .env-nav a[aria-current="page"] { border-color: #60a5fa; background: #1e3a8a; color: #dbeafe; font-weight: 700; }
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 24px 0; }
     .card, table { background: #111827; border: 1px solid #334155; border-radius: 14px; }
     .card { padding: 16px; }
@@ -132,6 +135,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
   <main>
     <h1>NewBot smoke dashboard</h1>
     <p class="muted">Read-only view from recent smoke reports. Auto-refreshes every 60 seconds. Secrets are not rendered.</p>
+    ${renderEnvironmentNav(selectedEnvironment)}
     ${selectedEnvironment ? `<p class="muted">Environment filter: ${escapeHtml(selectedEnvironment)}</p>` : ''}
     <section class="cards" aria-label="Smoke summary">
       <div class="card"><div class="label">Total smoke runs</div><div class="value">${metrics.total}</div></div>
@@ -213,6 +217,22 @@ function formatTrendSequence(trend: SmokeReportTrend): string {
     return 'no smoke reports yet';
   }
   return trend.runs.map((run) => (isRunOk(run) ? 'ok' : 'failed')).join(' · ');
+}
+
+function renderEnvironmentNav(selectedEnvironment: string | undefined): string {
+  const links = [
+    { label: 'All', href: '/ops/smoke-dashboard', environment: undefined },
+    { label: 'Production', href: '/ops/smoke-dashboard?env=production', environment: 'production' },
+    { label: 'Staging', href: '/ops/smoke-dashboard?env=staging', environment: 'staging' },
+    { label: 'Canary', href: '/ops/smoke-dashboard?env=canary', environment: 'canary' },
+  ];
+  const renderedLinks = links
+    .map((link) => {
+      const isCurrent = link.environment === selectedEnvironment;
+      return `<a href="${link.href}"${isCurrent ? ' aria-current="page"' : ''}>${link.label}</a>`;
+    })
+    .join('');
+  return `<nav class="env-nav" aria-label="Environment filter">${renderedLinks}</nav>`;
 }
 
 function parseEnvironmentFilter(value: string | null): string | undefined {

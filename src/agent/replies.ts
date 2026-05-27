@@ -426,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 36 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook、/metrics；也有会自动刷新、带趋势条和环境过滤的 smoke dashboard。',
+    text: '我先记下了。现在 Phase 37 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook、/metrics；也有会自动刷新、带趋势条、环境过滤和快捷切换入口的 smoke dashboard。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }

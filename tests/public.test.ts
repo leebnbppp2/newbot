@@ -312,6 +312,10 @@ describe('public routes', () => {
     expect(html).toContain('NewBot smoke dashboard');
     expect(html).toContain('<meta http-equiv="refresh" content="60">');
     expect(html).toContain('Auto-refreshes every 60 seconds.');
+    expect(html).toContain('href="/ops/smoke-dashboard" aria-current="page"');
+    expect(html).toContain('href="/ops/smoke-dashboard?env=production"');
+    expect(html).toContain('href="/ops/smoke-dashboard?env=staging"');
+    expect(html).toContain('href="/ops/smoke-dashboard?env=canary"');
     expect(html).toContain('Total smoke runs');
     expect(html).toContain('3');
     expect(html).toContain('Pass rate');
@@ -378,6 +382,10 @@ describe('public routes', () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain('Environment filter: production');
+    expect(html).toContain('href="/ops/smoke-dashboard"');
+    expect(html).toContain('href="/ops/smoke-dashboard?env=production" aria-current="page"');
+    expect(html).toContain('href="/ops/smoke-dashboard?env=staging"');
+    expect(html).toContain('href="/ops/smoke-dashboard?env=canary"');
     expect(html).toContain('Total smoke runs');
     expect(html).toContain('100.0%');
     expect(html).toContain('ok · ok');
