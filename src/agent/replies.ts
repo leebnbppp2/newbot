@@ -1,6 +1,7 @@
 /**
  * Phase 17 reply builders.
  */
+import type { SmokeReportRun } from '../db/cron_runs';
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
 import type { OrderGatewayReadiness, RemoteDataSource } from '../lib/order_gateway';
@@ -425,7 +426,7 @@ export function buildGettingStartedReply(): BotReply {
 
 export function buildDefaultReply(): BotReply {
   return {
-    text: '我先记下了。现在 Phase 25 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；smoke 结果可以认证回传保存。',
+    text: '我先记下了。现在 Phase 26 已经支持 /start、/account、/market、/find、/detail、/link、/buy、/orders、/openorders、/positions、/fills、/cancel、/health、/runbook；runbook 会读取最近一次 smoke 回传结果。',
     replyMarkup: buildMainMenuMarkup(),
   };
 }
@@ -456,18 +457,20 @@ export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
   };
 }
 
-export function buildRunbookReply(readiness: OrderGatewayReadiness): BotReply {
+export function buildRunbookReply(readiness: OrderGatewayReadiness, latestSmokeReport?: SmokeReportRun | null): BotReply {
   const blockers = readiness.warnings.length > 0
     ? readiness.warnings.map((warning) => `- ${warning}`)
     : ['暂时没有阻断项'];
+  const smokeLines = buildSmokeReportLines(latestSmokeReport);
 
   return {
     text: [
-      'Phase 25 灰度 runbook：',
+      'Phase 26 灰度 runbook：',
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,
       `Live trading allowlist：${readiness.liveTradingAllowlist ? '已启用' : '未启用'}`,
+      ...smokeLines,
       '上线前：',
       '- npm run smoke -- <worker-url>',
       '- npm run smoke -- --require-ready <worker-url>',
@@ -484,6 +487,28 @@ export function buildRunbookReply(readiness: OrderGatewayReadiness): BotReply {
     ].join('\n'),
     replyMarkup: buildOperatorMenuMarkup(),
   };
+}
+
+function buildSmokeReportLines(report?: SmokeReportRun | null): string[] {
+  if (!report) {
+    return ['最近 smoke：还没有回传记录'];
+  }
+
+  if (!report.detail) {
+    return [`最近 smoke：${report.status === 'ok' ? '通过' : '失败'}（${report.createdAt}，报告内容无法解析）`];
+  }
+
+  const checkLines = report.detail.checks.slice(0, 3).map((check) => {
+    const state = check.ok ? '通过' : '失败';
+    return `- ${check.name} ${state}`;
+  });
+  const status = report.detail.ok ? '通过' : '失败';
+  return [
+    `最近 smoke：${status}`,
+    `目标：${report.detail.target}`,
+    `时间：${report.createdAt}`,
+    ...checkLines,
+  ];
 }
 
 export function buildMainMenuMarkup(): TelegramMenuMarkup {

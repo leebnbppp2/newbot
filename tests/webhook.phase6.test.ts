@@ -55,12 +55,22 @@ type BuilderAttributionRow = {
   amount_usdc: number | null;
 };
 
+type CronRunRow = {
+  id: number;
+  job_name: string;
+  status: string;
+  detail: string | null;
+  created_at: string;
+};
+
 class FakeD1 {
   tradingAccounts = new Map<string, TradingAccountRow>();
 
   tradeEvents: TradeEventRow[] = [];
 
   builderAttributions: BuilderAttributionRow[] = [];
+
+  cronRuns: CronRunRow[] = [];
 
   conversations: ConversationRow[] = [];
 
@@ -129,6 +139,15 @@ class FakePreparedStatement {
       const results = this.db.tradeEvents
         .filter((row) => row.telegram_user_id === telegramUserId && row.bot_id === botId)
         .sort((a, b) => (a.id < b.id ? 1 : -1));
+      return { results: results as T[] };
+    }
+
+    if (this.query.includes('FROM cron_runs')) {
+      const [jobName] = this.values as [string];
+      const results = this.db.cronRuns
+        .filter((row) => row.job_name === jobName)
+        .sort((a, b) => (a.id < b.id ? 1 : -1))
+        .slice(0, 1);
       return { results: results as T[] };
     }
 
@@ -1256,7 +1275,7 @@ describe('handleTelegramWebhook phase 6', () => {
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string; reply_markup?: ReplyMarkup };
-    expect(payload.text).toContain('Phase 25 灰度 runbook');
+    expect(payload.text).toContain('Phase 26 灰度 runbook');
     expect(payload.text).toContain('npm run smoke -- <worker-url>');
     expect(payload.text).toContain('npm run smoke -- --require-ready <worker-url>');
     expect(payload.text).toContain('--report-url /ops/smoke-report');
@@ -1270,6 +1289,57 @@ describe('handleTelegramWebhook phase 6', () => {
         expect.objectContaining({ callback_data: 'ops_runbook' }),
       ]),
     );
+  });
+
+  it('shows the latest persisted smoke report in the operator runbook', async () => {
+    const db = new FakeD1();
+    db.cronRuns.push(
+      {
+        id: 1,
+        job_name: 'smoke',
+        status: 'failed',
+        detail: JSON.stringify({
+          ok: false,
+          target: 'https://old-worker.example.workers.dev',
+          checks: [{ name: 'rollout_readiness', ok: false, detail: 'old blocker' }],
+        }),
+        created_at: '2026-05-26T00:00:00.000Z',
+      },
+      {
+        id: 2,
+        job_name: 'smoke',
+        status: 'ok',
+        detail: JSON.stringify({
+          ok: true,
+          target: 'https://newbot.example.workers.dev',
+          checks: [
+            { name: 'healthz', ok: true },
+            { name: 'version', ok: true },
+            { name: 'webhook_secret', ok: true },
+          ],
+        }),
+        created_at: '2026-05-27T08:30:00.000Z',
+      },
+    );
+    const env = makeEnv(db, {
+      NEWBOT_OPERATOR_TELEGRAM_IDS: '9001',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+      POLYMARKET_BUILDER_TAG: 'newbot-builder',
+      POLYMARKET_BUILDER_API_KEY: 'builder-key',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/runbook', 9001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('最近 smoke：通过');
+    expect(payload.text).toContain('https://newbot.example.workers.dev');
+    expect(payload.text).toContain('healthz 通过');
+    expect(payload.text).not.toContain('old-worker');
   });
 
   it('keeps the rollout runbook behind the operator allowlist', async () => {
@@ -1293,7 +1363,7 @@ describe('handleTelegramWebhook phase 6', () => {
     const [, editInit] = editCall as [string, RequestInit];
     const payload = JSON.parse(String(editInit.body)) as { text: string };
     expect(payload.text).toContain('这个系统状态入口只给配置过的操作者使用');
-    expect(payload.text).not.toContain('Phase 25 灰度 runbook');
+    expect(payload.text).not.toContain('Phase 26 灰度 runbook');
   });
 
   it('lists recent simulated orders', async () => {

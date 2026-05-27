@@ -22,6 +22,7 @@ import {
 } from '../agent/replies';
 import { createAccountLinkSession } from '../db/account_sessions';
 import { createBuilderAttribution } from '../db/builder_attributions';
+import { getLatestSmokeReportRun } from '../db/cron_runs';
 import { appendConversationTurn } from '../db/conversations';
 import {
   createTradeEvent,
@@ -164,7 +165,7 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     if (!isTelegramOperator(env, telegramUserId)) {
       return buildOperatorOnlyReply();
     }
-    return buildRunbookReply(getOrderGatewayReadiness(env));
+    return buildRunbookReply(getOrderGatewayReadiness(env), await getLatestSmokeReportRun(env));
   }
 
   if (normalized === '/link') {
@@ -294,7 +295,10 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
           callbackToast: { text: '只有配置过的操作者可以看灰度 runbook', showAlert: true },
         };
       }
-      return { reply: buildRunbookReply(getOrderGatewayReadiness(env)), callbackToast: { text: '灰度 runbook 已刷新', showAlert: false } };
+      return {
+        reply: buildRunbookReply(getOrderGatewayReadiness(env), await getLatestSmokeReportRun(env)),
+        callbackToast: { text: '灰度 runbook 已刷新', showAlert: false },
+      };
     case 'getting_started':
       return { reply: buildGettingStartedReply(), callbackToast: { text: '开始说明在这里', showAlert: false } };
     case 'start_link_account':
