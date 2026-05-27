@@ -316,6 +316,8 @@ describe('public routes', () => {
     expect(html).toContain('href="/ops/smoke-dashboard?env=production"');
     expect(html).toContain('href="/ops/smoke-dashboard?env=staging"');
     expect(html).toContain('href="/ops/smoke-dashboard?env=canary"');
+    expect(html).toContain('Overall status');
+    expect(html).toContain('Attention');
     expect(html).toContain('Total smoke runs');
     expect(html).toContain('3');
     expect(html).toContain('Pass rate');
@@ -327,6 +329,8 @@ describe('public routes', () => {
     expect(html).toContain('Smoke trend (last 10)');
     expect(html).toContain('Trend pass rate');
     expect(html).toContain('ok · failed · ok');
+    expect(html).toContain('class="trend-dot ok" title="ok"');
+    expect(html).toContain('class="trend-dot failed" title="failed"');
     expect(html).toContain('Recent smoke runs');
     expect(html).toContain('rollout_readiness failed');
     expect(html).not.toContain('old-production.example');
@@ -382,6 +386,8 @@ describe('public routes', () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain('Environment filter: production');
+    expect(html).toContain('Overall status');
+    expect(html).toContain('Healthy');
     expect(html).toContain('href="/ops/smoke-dashboard"');
     expect(html).toContain('href="/ops/smoke-dashboard?env=production" aria-current="page"');
     expect(html).toContain('href="/ops/smoke-dashboard?env=staging"');

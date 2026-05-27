@@ -120,6 +120,9 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     .card { padding: 16px; }
     .label { color: #94a3b8; font-size: 13px; }
     .value { margin-top: 6px; font-size: 26px; font-weight: 700; }
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; font-size: 18px; }
+    .badge.ok { background: rgba(22, 163, 74, 0.14); }
+    .badge.failed { background: rgba(220, 38, 38, 0.14); }
     table { width: 100%; border-collapse: collapse; overflow: hidden; }
     th, td { padding: 12px 14px; border-bottom: 1px solid #334155; text-align: left; vertical-align: top; }
     th { color: #cbd5e1; font-size: 13px; }
@@ -129,6 +132,10 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     .failed { color: #fca5a5; }
     .trend { background: #111827; border: 1px solid #334155; border-radius: 14px; padding: 16px; margin: 24px 0; }
     .sequence { margin-top: 8px; font-weight: 700; letter-spacing: 0.02em; }
+    .trend-dots { display: flex; gap: 6px; margin-top: 12px; }
+    .trend-dot { width: 18px; height: 18px; border-radius: 999px; border: 1px solid #334155; }
+    .trend-dot.ok { background: #22c55e; }
+    .trend-dot.failed { background: #ef4444; }
   </style>
 </head>
 <body>
@@ -138,6 +145,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     ${renderEnvironmentNav(selectedEnvironment)}
     ${selectedEnvironment ? `<p class="muted">Environment filter: ${escapeHtml(selectedEnvironment)}</p>` : ''}
     <section class="cards" aria-label="Smoke summary">
+      <div class="card"><div class="label">Overall status</div><div class="value"><span class="badge ${metrics.failed > 0 ? 'failed' : 'ok'}">${escapeHtml(formatDashboardStatus(metrics.total, metrics.failed))}</span></div></div>
       <div class="card"><div class="label">Total smoke runs</div><div class="value">${metrics.total}</div></div>
       <div class="card"><div class="label">Passed</div><div class="value ok">${metrics.passed}</div></div>
       <div class="card"><div class="label">Failed</div><div class="value failed">${metrics.failed}</div></div>
@@ -163,6 +171,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
       <p class="muted">Newest first, based on the latest ${trend.total} smoke reports.</p>
       <div>Trend pass rate: ${formatPercent(trend.passRate)} (${trend.passed} passed / ${trend.failed} failed)</div>
       <div class="sequence">${escapeHtml(formatTrendSequence(trend))}</div>
+      ${renderTrendDots(trend)}
     </section>
     <h2>Recent smoke runs</h2>
     <table>
@@ -217,6 +226,26 @@ function formatTrendSequence(trend: SmokeReportTrend): string {
     return 'no smoke reports yet';
   }
   return trend.runs.map((run) => (isRunOk(run) ? 'ok' : 'failed')).join(' · ');
+}
+
+function formatDashboardStatus(total: number, failed: number): string {
+  if (total === 0) {
+    return 'No data';
+  }
+  return failed > 0 ? 'Attention' : 'Healthy';
+}
+
+function renderTrendDots(trend: SmokeReportTrend): string {
+  if (trend.runs.length === 0) {
+    return '';
+  }
+  const dots = trend.runs
+    .map((run) => {
+      const status = isRunOk(run) ? 'ok' : 'failed';
+      return `<span class="trend-dot ${status}" title="${status}" aria-label="${status}"></span>`;
+    })
+    .join('');
+  return `<div class="trend-dots" aria-label="Smoke trend dots">${dots}</div>`;
 }
 
 function renderEnvironmentNav(selectedEnvironment: string | undefined): string {
