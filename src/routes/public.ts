@@ -2,7 +2,7 @@
  * Public unauthenticated routes exposed by the Worker.
  */
 
-import { getSmokeReportMetrics } from '../db/cron_runs';
+import { getRecentSmokeReportRuns, getSmokeReportMetrics, type SmokeReportRun } from '../db/cron_runs';
 import { getOrderGatewayReadiness } from '../lib/order_gateway';
 import type { Env } from '../types';
 
@@ -96,11 +96,13 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
   }
 
   const metrics = await getSmokeReportMetrics(env, 50);
+  const recentRuns = await getRecentSmokeReportRuns(env, 2);
   return html(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="60">
   <title>NewBot smoke dashboard</title>
   <style>
     :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; }
@@ -125,7 +127,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
 <body>
   <main>
     <h1>NewBot smoke dashboard</h1>
-    <p class="muted">Read-only view from recent smoke reports. Secrets are not rendered.</p>
+    <p class="muted">Read-only view from recent smoke reports. Auto-refreshes every 60 seconds. Secrets are not rendered.</p>
     <section class="cards" aria-label="Smoke summary">
       <div class="card"><div class="label">Total smoke runs</div><div class="value">${metrics.total}</div></div>
       <div class="card"><div class="label">Passed</div><div class="value ok">${metrics.passed}</div></div>
@@ -147,6 +149,19 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
         </tr>`).join('')}
       </tbody>
     </table>
+    <h2>Recent smoke runs</h2>
+    <table>
+      <thead><tr><th>Created</th><th>Environment</th><th>Status</th><th>Target</th><th>Checks</th></tr></thead>
+      <tbody>
+        ${recentRuns.map((run) => `<tr>
+          <td>${escapeHtml(run.createdAt)}</td>
+          <td>${escapeHtml(run.detail?.environment ?? 'unknown')}</td>
+          <td class="${isRunOk(run) ? 'ok' : 'failed'}">${escapeHtml(isRunOk(run) ? 'ok' : 'failed')}</td>
+          <td>${renderRunTarget(run.detail?.target)}</td>
+          <td>${escapeHtml(formatRunChecks(run))}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
   </main>
 </body>
 </html>`);
@@ -157,6 +172,29 @@ function html(body: string, status = 200): Response {
     status,
     headers: { 'content-type': 'text/html; charset=utf-8' },
   });
+}
+
+function isRunOk(run: SmokeReportRun): boolean {
+  return run.detail?.ok === true || run.status === 'ok';
+}
+
+function renderRunTarget(target: string | undefined): string {
+  if (!target) {
+    return 'unknown';
+  }
+  const escapedTarget = escapeHtml(target);
+  return `<a href="${escapedTarget}">${escapedTarget}</a>`;
+}
+
+function formatRunChecks(run: SmokeReportRun): string {
+  const checks = run.detail?.checks ?? [];
+  if (checks.length === 0) {
+    return 'no checks';
+  }
+  return checks
+    .slice(0, 3)
+    .map((check) => `${check.name} ${check.ok ? 'ok' : 'failed'}`)
+    .join(', ');
 }
 
 function json(payload: unknown, status = 200): Response {

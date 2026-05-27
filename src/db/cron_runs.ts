@@ -119,6 +119,10 @@ export async function getSmokeReportMetrics(env: Env, limit = 50): Promise<Smoke
   };
 }
 
+export async function getRecentSmokeReportRuns(env: Env, limit = 2): Promise<SmokeReportRun[]> {
+  return listRecentSmokeReportRuns(env, limit);
+}
+
 async function listRecentSmokeReportRuns(env: Env, limit: number): Promise<SmokeReportRun[]> {
   const { results } = await env.DB.prepare(
     `SELECT id, job_name, status, detail, created_at

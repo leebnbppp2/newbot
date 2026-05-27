@@ -310,6 +310,8 @@ describe('public routes', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
     expect(html).toContain('NewBot smoke dashboard');
+    expect(html).toContain('<meta http-equiv="refresh" content="60">');
+    expect(html).toContain('Auto-refreshes every 60 seconds.');
     expect(html).toContain('Total smoke runs');
     expect(html).toContain('3');
     expect(html).toContain('Pass rate');
@@ -318,6 +320,8 @@ describe('public routes', () => {
     expect(html).toContain('https://production.example.workers.dev');
     expect(html).toContain('staging');
     expect(html).toContain('https://staging.example.workers.dev?note=&lt;bad&gt;');
+    expect(html).toContain('Recent smoke runs');
+    expect(html).toContain('rollout_readiness failed');
     expect(html).not.toContain('old-production.example');
     expect(html).not.toContain('cleanup.example');
   });
