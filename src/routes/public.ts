@@ -146,6 +146,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     ${selectedEnvironment ? `<p class="muted">Environment filter: ${escapeHtml(selectedEnvironment)}</p>` : ''}
     <section class="cards" aria-label="Smoke summary">
       <div class="card"><div class="label">Overall status</div><div class="value"><span class="badge ${metrics.failed > 0 ? 'failed' : 'ok'}">${escapeHtml(formatDashboardStatus(metrics.total, metrics.failed))}</span></div></div>
+      <div class="card"><div class="label">Latest smoke</div><div class="value">${escapeHtml(formatLatestSmoke(recentRuns))}</div></div>
       <div class="card"><div class="label">Total smoke runs</div><div class="value">${metrics.total}</div></div>
       <div class="card"><div class="label">Passed</div><div class="value ok">${metrics.passed}</div></div>
       <div class="card"><div class="label">Failed</div><div class="value failed">${metrics.failed}</div></div>
@@ -233,6 +234,10 @@ function formatDashboardStatus(total: number, failed: number): string {
     return 'No data';
   }
   return failed > 0 ? 'Attention' : 'Healthy';
+}
+
+function formatLatestSmoke(recentRuns: SmokeReportRun[]): string {
+  return recentRuns[0]?.createdAt ?? 'no smoke reports yet';
 }
 
 function renderTrendDots(trend: SmokeReportTrend): string {
