@@ -271,6 +271,23 @@ describe('handleTelegramWebhook phase 4', () => {
     ]);
   });
 
+  it('returns current phase guidance for unsupported text', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+
+    const response = await handleTelegramWebhook(makeMessageRequest('随便问一句'), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('现在 Phase 41');
+    expect(payload.text).toContain('Freshness');
+    expect(payload.text).toContain('check detail');
+  });
+
   it('returns market overview and caches it', async () => {
     const db = new FakeD1();
     const env = makeEnv(db);
