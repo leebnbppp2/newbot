@@ -283,7 +283,7 @@ describe('public routes', () => {
           ok: false,
           target: 'https://staging.example.workers.dev?note=<bad>',
           environment: 'staging',
-          checks: [{ name: 'rollout_readiness', ok: false }],
+          checks: [{ name: 'rollout_readiness', ok: false, detail: 'missing order API <secret>' }],
         }),
         created_at: '2026-05-27T08:10:00.000Z',
       },
@@ -337,6 +337,8 @@ describe('public routes', () => {
     expect(html).toContain('class="trend-dot failed" title="failed"');
     expect(html).toContain('Recent smoke runs');
     expect(html).toContain('rollout_readiness failed');
+    expect(html).toContain('missing order API &lt;secret&gt;');
+    expect(html).not.toContain('missing order API <secret>');
     expect(html).not.toContain('old-production.example');
     expect(html).not.toContain('cleanup.example');
   });

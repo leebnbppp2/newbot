@@ -220,7 +220,10 @@ function formatRunChecks(run: SmokeReportRun): string {
   }
   return checks
     .slice(0, 3)
-    .map((check) => `${check.name} ${check.ok ? 'ok' : 'failed'}`)
+    .map((check) => {
+      const status = check.ok ? 'ok' : 'failed';
+      return check.detail ? `${check.name} ${status}: ${check.detail}` : `${check.name} ${status}`;
+    })
     .join(', ');
 }
 
