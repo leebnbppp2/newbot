@@ -99,6 +99,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
   const metrics = await getSmokeReportMetrics(env, 50, selectedEnvironment);
   const trend = await getSmokeReportTrend(env, 10, selectedEnvironment);
   const recentRuns = await getRecentSmokeReportRuns(env, 2, selectedEnvironment);
+  const smokeFreshness = getSmokeFreshness(recentRuns);
   return html(`<!doctype html>
 <html lang="en">
 <head>
@@ -147,6 +148,7 @@ export async function handleSmokeDashboard(request: Request, env: Env): Promise<
     <section class="cards" aria-label="Smoke summary">
       <div class="card"><div class="label">Overall status</div><div class="value"><span class="badge ${metrics.failed > 0 ? 'failed' : 'ok'}">${escapeHtml(formatDashboardStatus(metrics.total, metrics.failed))}</span></div></div>
       <div class="card"><div class="label">Latest smoke</div><div class="value">${escapeHtml(formatLatestSmoke(recentRuns))}</div></div>
+      <div class="card"><div class="label">Freshness</div><div class="value"><span class="badge ${smokeFreshness.isStale ? 'failed' : 'ok'}">${escapeHtml(smokeFreshness.label)}</span></div></div>
       <div class="card"><div class="label">Total smoke runs</div><div class="value">${metrics.total}</div></div>
       <div class="card"><div class="label">Passed</div><div class="value ok">${metrics.passed}</div></div>
       <div class="card"><div class="label">Failed</div><div class="value failed">${metrics.failed}</div></div>
@@ -238,6 +240,24 @@ function formatDashboardStatus(total: number, failed: number): string {
 
 function formatLatestSmoke(recentRuns: SmokeReportRun[]): string {
   return recentRuns[0]?.createdAt ?? 'no smoke reports yet';
+}
+
+const SMOKE_STALE_AFTER_MS = 2 * 60 * 60 * 1000;
+
+function getSmokeFreshness(recentRuns: SmokeReportRun[]): { label: string; isStale: boolean } {
+  const latest = recentRuns[0]?.createdAt;
+  if (!latest) {
+    return { label: 'No data', isStale: true };
+  }
+
+  const latestMs = Date.parse(latest);
+  if (!Number.isFinite(latestMs)) {
+    return { label: 'Unknown', isStale: true };
+  }
+
+  return Date.now() - latestMs > SMOKE_STALE_AFTER_MS
+    ? { label: 'Stale', isStale: true }
+    : { label: 'Fresh', isStale: false };
 }
 
 function renderTrendDots(trend: SmokeReportTrend): string {
