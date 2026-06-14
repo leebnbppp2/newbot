@@ -446,6 +446,7 @@ export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
   return {
     text: [
       'NewBot 当前状态：',
+      `交易模式：${readiness.tradingMode === 'live' ? '真实下单（live）' : '模拟下单（simulated）'}`,
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,
@@ -495,6 +496,7 @@ export function buildRunbookReply(
   return {
     text: [
       title,
+      `交易模式：${readiness.tradingMode === 'live' ? '真实下单（live）' : '模拟下单（simulated）'}`,
       `Live order API：${readiness.liveOrderApi ? '已配置' : '未完整配置'}`,
       `Canonical signing：${readiness.signing ? '已启用' : '未启用'}`,
       `Builder attribution：${readiness.builderAttribution}`,

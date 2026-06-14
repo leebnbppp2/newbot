@@ -13,6 +13,7 @@ export function handleHealthz(request: Request, env: Env): Response {
     ok: true,
     version: env.NEWBOT_VERSION ?? '0.1.0',
     readiness: {
+      trading_mode: readiness.tradingMode,
       live_order_api: readiness.liveOrderApi,
       signing: readiness.signing,
       builder_attribution: readiness.builderAttribution,

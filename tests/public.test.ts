@@ -70,6 +70,7 @@ function makeEnv(overrides: Partial<Env> = {}, db: FakeD1 = new FakeD1()): Env {
     NEWBOT_VERSION: '0.6.0',
     TELEGRAM_WEBHOOK_SECRET: 'test-secret',
     BOT_TOKEN_CRYPTO_ZH: 'bot-token',
+    NEWBOT_TRADING_MODE: 'live',
     ...overrides,
   };
 }
@@ -103,6 +104,45 @@ describe('public routes', () => {
     expect(payload.readiness.warnings).toEqual(expect.arrayContaining([
       'Builder Program 配置不完整，归因暂时不会完整生效。',
       'signing secret 还没配置，live 请求暂时不会带 canonical 签名头。',
+    ]));
+  });
+
+  it('reports trading_mode and warns when the master switch is off despite live config', async () => {
+    const env = makeEnv({
+      NEWBOT_TRADING_MODE: 'simulated',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+    });
+
+    const response = handleHealthz(new Request('https://example.com/healthz'), env);
+    const payload = await response.json() as {
+      readiness: { trading_mode: string; live_order_api: boolean; warnings: string[] };
+    };
+
+    expect(payload.readiness.trading_mode).toBe('simulated');
+    expect(payload.readiness.live_order_api).toBe(true);
+    expect(payload.readiness.warnings).toEqual(expect.arrayContaining([
+      '交易主开关 NEWBOT_TRADING_MODE 未设为 live：即使 live API 已配置，所有下单也会强制走模拟单。',
+    ]));
+  });
+
+  it('reports trading_mode live when the master switch is on', async () => {
+    const env = makeEnv({
+      NEWBOT_TRADING_MODE: 'live',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+    });
+
+    const response = handleHealthz(new Request('https://example.com/healthz'), env);
+    const payload = await response.json() as {
+      readiness: { trading_mode: string; warnings: string[] };
+    };
+
+    expect(payload.readiness.trading_mode).toBe('live');
+    expect(payload.readiness.warnings).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('交易主开关'),
     ]));
   });
 

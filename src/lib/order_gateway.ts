@@ -51,6 +51,8 @@ export interface BuilderAttributionDetail {
 
 export type RemoteDataSource = 'live' | 'cache' | 'none';
 
+export type TradingMode = 'live' | 'simulated';
+
 export interface RemoteCollectionResult<T> {
   items: T[];
   source: RemoteDataSource;
@@ -58,6 +60,7 @@ export interface RemoteCollectionResult<T> {
 }
 
 export interface OrderGatewayReadiness {
+  tradingMode: TradingMode;
   liveOrderApi: boolean;
   signing: boolean;
   builderAttribution: 'ready' | 'partial' | 'disabled';
@@ -79,14 +82,19 @@ const ORDER_PROTOCOL_VERSION = 'polymarket_clob_v2';
 
 export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Promise<ExecuteBuyOrderResult> {
   const liveConfig = getLiveOrderConfig(env);
-  if (!liveConfig) {
+  const tradingMode = getTradingMode(env);
+  // 全局主开关优先：未设为 live 时，即使 live API 已配置也强制模拟单。
+  if (tradingMode !== 'live' || !liveConfig) {
+    const simulatedByMode = tradingMode !== 'live';
     return {
       mode: 'simulated',
       status: 'simulated_submitted',
       orderId: `sim-${Date.now()}`,
       detail: {
-        reason: 'missing_live_order_config',
-        message: '还没接入真实下单 API，先按模拟单记录。',
+        reason: simulatedByMode ? 'trading_mode_simulated' : 'missing_live_order_config',
+        message: simulatedByMode
+          ? '交易主开关 NEWBOT_TRADING_MODE 未设为 live，先按模拟单记录。'
+          : '还没接入真实下单 API，先按模拟单记录。',
       },
       builderAttribution: null,
     };
@@ -245,6 +253,7 @@ export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
   const builderTag = env.POLYMARKET_BUILDER_TAG?.trim();
   const builderApiKey = env.POLYMARKET_BUILDER_API_KEY?.trim();
   const liveTradingAllowlist = env.NEWBOT_LIVE_TRADING_TELEGRAM_IDS?.trim();
+  const tradingMode = getTradingMode(env);
   const warnings: string[] = [];
 
   if (!baseUrl || !apiKey) {
@@ -256,18 +265,30 @@ export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
   if ((baseUrl || apiKey) && !signingSecret) {
     warnings.push('signing secret 还没配置，live 请求暂时不会带 canonical 签名头。');
   }
+  if (tradingMode !== 'live' && baseUrl && apiKey) {
+    warnings.push('交易主开关 NEWBOT_TRADING_MODE 未设为 live：即使 live API 已配置，所有下单也会强制走模拟单。');
+  }
 
   const builderAttribution = builderTag && builderApiKey
     ? 'ready'
     : (builderTag || builderApiKey ? 'partial' : 'disabled');
 
   return {
+    tradingMode,
     liveOrderApi: Boolean(baseUrl && apiKey),
     signing: Boolean(baseUrl && apiKey && signingSecret),
     builderAttribution,
     liveTradingAllowlist: Boolean(liveTradingAllowlist),
     warnings,
   };
+}
+
+/**
+ * 全局交易主开关:仅当 NEWBOT_TRADING_MODE 显式为 'live' 时才允许真实下单;
+ * 未设置或任何其他值都回退为 'simulated'(安全默认)。
+ */
+export function getTradingMode(env: Env): TradingMode {
+  return env.NEWBOT_TRADING_MODE?.trim().toLowerCase() === 'live' ? 'live' : 'simulated';
 }
 
 function getLiveOrderConfig(env: Env): LiveOrderConfig | null {

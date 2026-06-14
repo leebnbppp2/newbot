@@ -244,6 +244,7 @@ function makeEnv(db: FakeD1, overrides: Partial<Env> = {}): Env {
     NEWBOT_VERSION: '0.6.0',
     TELEGRAM_WEBHOOK_SECRET: 'test-secret',
     BOT_TOKEN_CRYPTO_ZH: 'bot-token',
+    NEWBOT_TRADING_MODE: 'live',
     ...overrides,
   };
 }
@@ -528,6 +529,66 @@ describe('handleTelegramWebhook phase 6', () => {
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('模拟下单已经记录');
     expect(payload.text).toContain('live 交易还没对你开放');
+  });
+
+  it('forces simulated orders when the NEWBOT_TRADING_MODE master switch is not live', async () => {
+    const db = new FakeD1();
+    db.tradingAccounts.set('1001:crypto_zh', {
+      telegram_user_id: '1001',
+      bot_id: 'crypto_zh',
+      status: 'active',
+      auth_mode: 'managed_signer',
+      account_label: 'Dora 主账户',
+      signer_address: '0x1234567890abcdef1234567890abcdef12345678',
+      funder_address: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    // 注意：live API 全部配齐，且没有 allowlist 限制(用户被允许)，
+    // 但主开关被显式置为 simulated —— 这笔仍必须走模拟单。
+    const env = makeEnv(db, {
+      NEWBOT_TRADING_MODE: 'simulated',
+      POLYMARKET_ORDER_API_BASE: 'https://orders.example.com',
+      POLYMARKET_ORDER_API_KEY: 'order-key',
+      POLYMARKET_ORDER_SIGNING_SECRET: 'signing-secret',
+      POLYMARKET_BUILDER_TAG: 'newbot-phase8',
+      POLYMARKET_BUILDER_API_KEY: 'builder-secret-key-1234',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify([
+          {
+            question: 'Will BTC break 120k in 2026?',
+            volume: 1234567,
+            endDate: '2026-12-31T00:00:00Z',
+            slug: 'btc-break-120k-2026',
+            outcomes: '["Yes","No"]',
+            outcomePrices: '["0.61","0.39"]',
+            clobTokenIds: '["111","222"]',
+          },
+        ]), { status: 200 });
+      }
+      if (url === 'https://orders.example.com/orders') {
+        throw new Error('live order endpoint must not be called while trading mode is simulated');
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const response = await handleTelegramWebhook(makeMessageRequest('/buy btc yes 50', 1001), env, 'crypto_zh');
+
+    expect(response.status).toBe(200);
+    expect(db.tradeEvents).toHaveLength(1);
+    expect(db.builderAttributions).toHaveLength(0);
+    expect(db.tradeEvents[0]).toMatchObject({
+      status: 'simulated_submitted',
+      order_id: expect.stringMatching(/^sim-/),
+    });
+    expect(db.tradeEvents[0]?.payload_json).toContain('trading_mode_simulated');
+    const orderCalls = fetchMock.mock.calls.filter(([input]) => String(input) === 'https://orders.example.com/orders');
+    expect(orderCalls).toHaveLength(0);
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    const payload = JSON.parse(String(init.body)) as { text: string };
+    expect(payload.text).toContain('模拟下单已经记录');
+    expect(payload.text).toContain('模拟交易模式');
   });
 
   it('submits a live buy request with wallet-signature metadata when wallet mode is present', async () => {

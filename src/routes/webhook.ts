@@ -596,6 +596,15 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
     });
   }
 
+  const simulatedReason = execution.mode === 'simulated'
+    ? (execution.detail as { reason?: string }).reason
+    : undefined;
+  const simulatedNote = !liveTradingAllowed
+    ? 'live 交易还没对你开放，所以这笔先按模拟单记录。你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。'
+    : simulatedReason === 'trading_mode_simulated'
+      ? '当前系统是模拟交易模式（NEWBOT_TRADING_MODE 未开启 live），这笔先按模拟单记录。你可以发 /orders 看订单，或发 /positions 看模拟仓位。'
+      : undefined;
+
   return buildSubmittedBuyReply(
     market,
     selectedOutcome?.name ?? normalizedOutcome,
@@ -603,7 +612,7 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
     execution.orderId,
     execution.mode,
     execution.status,
-    liveTradingAllowed ? undefined : 'live 交易还没对你开放，所以这笔先按模拟单记录。你现在可以发 /orders 看订单，或者发 /positions 看当前记录里的模拟仓位。',
+    simulatedNote,
   );
 }
 

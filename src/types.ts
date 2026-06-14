@@ -9,6 +9,7 @@ export interface Env {
   NEWBOT_VERSION?: string;
   TELEGRAM_WEBHOOK_SECRET: string;
   BOT_TOKEN_CRYPTO_ZH: string;
+  NEWBOT_TRADING_MODE?: string;
   POLYMARKET_ORDER_API_BASE?: string;
   POLYMARKET_ORDER_API_KEY?: string;
   POLYMARKET_ORDER_SIGNING_SECRET?: string;
