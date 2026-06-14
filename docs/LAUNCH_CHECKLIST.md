@@ -58,7 +58,15 @@ npx wrangler secret put NEWBOT_OPERATOR_TELEGRAM_IDS
 
 ## 5. Live trading 灰度开关
 
-如果还没准备真实交易，先不要配置 live order API 或 live allowlist。
+如果还没准备真实交易，先不要配置 live order API 或 live allowlist。即使配置了，只要交易总开关 `NEWBOT_TRADING_MODE` 不是 `live`，所有 `/buy` 仍会强制走模拟单（默认 `simulated`）。
+
+真实下单的总开关（非 secret，普通变量即可）：
+
+```text
+NEWBOT_TRADING_MODE=live
+```
+
+> 这是放量前最后一道闸门，也是紧急 kill-switch：把它从 `live` 改回 `simulated`（或删除）即可一键停止所有真实下单，已配置的 live API 不受影响。
 
 如果要小范围启用 live trading，需要配置：
 
@@ -71,6 +79,7 @@ npx wrangler secret put NEWBOT_LIVE_TRADING_TELEGRAM_IDS
 
 以及非 secret 配置：
 
+- `NEWBOT_TRADING_MODE=live`（不设则强制模拟单）
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_BUILDER_TAG`
 

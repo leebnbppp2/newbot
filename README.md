@@ -54,12 +54,17 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 ```
 
+交易总开关（控制真实下单 / 模拟下单），非 secret，按普通环境变量配置：
+- `NEWBOT_TRADING_MODE`：只有显式设为 `live` 才会发真实下单请求；未设置或任何其他值（含 `simulated`）都会**强制所有 `/buy` 走模拟单**，即使 live API 已配置。默认 `simulated`，作为安全兜底和紧急 kill-switch。
+
 如果你要启用 Phase 18 的 live order/portfolio request，还可以额外提供：
 - `POLYMARKET_ORDER_API_BASE`
 - `POLYMARKET_ORDER_API_KEY`
 - `POLYMARKET_ORDER_SIGNING_SECRET`
 - `POLYMARKET_BUILDER_TAG`
 - `POLYMARKET_BUILDER_API_KEY`
+
+> 真实下单需要同时满足：`NEWBOT_TRADING_MODE=live` + live API 配置齐全 +（若设置了 allowlist）用户在 `NEWBOT_LIVE_TRADING_TELEGRAM_IDS` 内。任一不满足即回退模拟单。
 
 如果你要启用 Phase 20 的 Telegram 内部状态入口权限限制，可以额外提供：
 - `NEWBOT_OPERATOR_TELEGRAM_IDS`：逗号分隔的 Telegram user id，例如 `123456,789012`
@@ -94,6 +99,7 @@ curl https://<your-worker>.workers.dev/healthz
 ## 当前 Phase 41 行为
 
 - `GET /healthz` → 返回 `{ ok, version, readiness }`，其中 readiness 会直接告诉你：
+  - 当前交易模式（`trading_mode`：`live` 真实下单 / `simulated` 模拟下单）
   - live order API 是否完整可用
   - canonical signing 是否已启用
   - Builder Program 是 `ready / partial / disabled`
