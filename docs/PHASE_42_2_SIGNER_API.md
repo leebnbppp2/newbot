@@ -242,11 +242,11 @@ signer 原始状态 → Worker `normalizeLiveStatus`(`order_gateway.ts:425`)产�
 
 ## 11. 落地后需同步改的 Worker 点(驱动 42.4)
 
-1. `buildLiveOrderPayload`(`order_gateway.ts:331`)补 `bot_id / telegram_user_id / side / order_type / price`,`signature_type` 改整数枚举。
-2. `normalizeLiveStatus` 补 `delayed/unmatched` 分支。
-3. `executeBuyOrder` / `cancelLiveOrder` / fetch* 的 `!response.ok` 改为按 §8 错误码分流。
-4. `getOrderGatewayReadiness` 增 `signerReachable / allowanceReady / credsReady`,接入 `/healthz` + `/health`。
-5. portal 完成绑定时调用 `POST /accounts/provision`。
+1. ✅ `buildLiveOrderPayload` 补 `bot_id / telegram_user_id / side / order_type / price`,`signature_type` 改整数枚举(已实现 2026-06-15)。
+2. ✅ `normalizeLiveStatus` 补 `delayed/unmatched` 分支(已实现)。
+3. ✅ `executeBuyOrder` / `cancelLiveOrder` 的 `!response.ok` 改为抛 `LiveOrderError`(`mapLiveOrderError` 按 §8 错误码出中文文案);读类 fetch* 保持缓存回退(已覆盖 UPSTREAM_TIMEOUT 语义)。已实现。
+4. ⏳ `getOrderGatewayReadiness` 增 `signerReachable / allowanceReady / credsReady` —— **延后到 signer 落地后**:`signerReachable` 需对 signer 健康端点异步探测(本设计未定义全局健康端点,落地 signer 时补);`allowanceReady / credsReady` 是 per-user 的,应走 §4.7 的 `GET /accounts/:user/readiness`,不属于无用户上下文的全局 readiness。
+5. ⏳ portal 完成绑定时调用 `POST /accounts/provision`(随 42.2 signer 落地)。
 
 ## 12. 验收标准(42.2)
 

@@ -81,6 +81,12 @@
 - readiness:`getOrderGatewayReadiness` 增加「signer service 可达」「allowance ready」「L2 creds 就绪」三项,接进 `/healthz` 与 `/health`。
 - 错误路径:区分「资金/授权不足」「签名失败」「CLOB 拒单」并各自给用户中文文案。
 
+> **实现进展(2026-06-15,分支 `feat/trading-mode-switch`)**:42.4 大部分已落地并测试(`tests/webhook.phase42.test.ts`,共 9 例;`npm run typecheck` 0 错、`npm test` 67 通过)。
+> - ✅ `buildLiveOrderPayload`:已补 `bot_id / telegram_user_id / side(BUY) / order_type(FOK) / price`,`signature_type` 改为整数枚举(`mapSignatureType`:`wallet_signature=0 / managed_signer=1 / gnosis_safe=2`),`protocol` 统一为 `polymarket_clob_v2`。`tick_size / neg_risk` 按设计**不由 Worker 传**,留给 signer。
+> - ✅ `normalizeLiveStatus`:已补 `live/delayed/unmatched` → `live_submitted/live_delayed/live_unmatched`。
+> - ✅ 错误路径:新增 `LiveOrderError` + `mapLiveOrderError`,解析 signer 统一 envelope `{error:{code,message,retryable}}`,映射 8 类中文文案;下单失败落 `live_failed` 审计 `trade_events`,撤单失败给精准文案且不改原状态。`cancelLiveOrder` 已补 `bot_id/telegram_user_id`。
+> - ⏳ **readiness 三项(signer 可达 / allowance / creds)延后到 42.2/42.3**:它们依赖 signer 服务真实存在 + 按用户异步探测(`GET /accounts/:user/readiness`),无法在「signer 尚不存在」时如实填充。为不产生误导性的恒假/别名字段,本步保持 `getOrderGatewayReadiness` 同步且仅基于配置,未新增伪探测字段。
+
 ### 42.5 灰度上线
 - 复用 `NEWBOT_LIVE_TRADING_TELEGRAM_IDS`:首发仅 1–2 个内部账户、单笔金额上限。
 - 复用 `--require-ready` smoke + runbook,把新 readiness 项纳入放量前检查。
