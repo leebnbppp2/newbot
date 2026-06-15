@@ -172,6 +172,34 @@ export function buildSubmittedBuyReply(
   };
 }
 
+export function buildBuyErrorReply(
+  market: MarketItem,
+  outcome: string,
+  amountUsdc: number,
+  error: { code: string; userMessage: string; retryable: boolean },
+): BotReply {
+  const retryLine = error.retryable
+    ? '这个问题通常是暂时的，过一会儿可以再试一次。'
+    : '先别急着重复下单，等问题解决了再发一次。';
+  return {
+    text: [
+      '真实下单没有成功。',
+      market.question,
+      `方向：${outcome}`,
+      `金额：${amountUsdc} USDC`,
+      `原因：${error.userMessage}`,
+      retryLine,
+      '你可以发 /orders 看记录，或发 /health 看系统状态。',
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '看市场', callback_data: 'market_overview' }],
+        [{ text: '我的账户', callback_data: 'account_status' }],
+      ],
+    },
+  };
+}
+
 export function buildOrdersReply(events: TradeEventRow[]): BotReply {
   if (events.length === 0) {
     return {

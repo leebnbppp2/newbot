@@ -5,6 +5,7 @@
 import {
   buildAccountReply,
   buildBuyConfirmReply,
+  buildBuyErrorReply,
   buildDefaultReply,
   buildFillsReply,
   buildGettingStartedReply,
@@ -46,7 +47,9 @@ import {
   fetchRemoteFills,
   fetchRemotePositions,
   getOrderGatewayReadiness,
+  LiveOrderError,
 } from '../lib/order_gateway';
+import type { ExecuteBuyOrderResult } from '../lib/order_gateway';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import type { CallbackToast } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
@@ -407,7 +410,15 @@ async function cancelOrderReply(env: Env, telegramUserId: string, botId: string,
     };
   }
 
-  const cancelled = await cancelLiveOrder(env, existing.order_id, account.auth_mode);
+  let cancelled: Awaited<ReturnType<typeof cancelLiveOrder>>;
+  try {
+    cancelled = await cancelLiveOrder(env, existing.order_id, account.auth_mode, botId, telegramUserId);
+  } catch (error) {
+    if (error instanceof LiveOrderError) {
+      return { text: `这笔订单撤单没成功：${error.userMessage}` };
+    }
+    throw error;
+  }
   if (!cancelled) {
     return {
       text: '当前还没配置真实下单 API，所以这笔 live 订单暂时没法撤。',
@@ -453,7 +464,18 @@ async function cancelOpenOrderCallbackReply(
     };
   }
 
-  const cancelled = await cancelLiveOrder(env, orderId, account.auth_mode);
+  let cancelled: Awaited<ReturnType<typeof cancelLiveOrder>>;
+  try {
+    cancelled = await cancelLiveOrder(env, orderId, account.auth_mode, botId, telegramUserId);
+  } catch (error) {
+    if (error instanceof LiveOrderError) {
+      return {
+        reply: { text: `这笔未成交单撤单没成功：${error.userMessage}` },
+        callbackToast: { text: '撤单没成功', showAlert: false },
+      };
+    }
+    throw error;
+  }
   if (!cancelled) {
     return {
       reply: {
@@ -545,17 +567,42 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
   }
 
   const selectedOutcome = market.outcomes?.find((outcome) => outcome.name.toLowerCase() === normalizedOutcome.toLowerCase());
+  const resolvedOutcome = selectedOutcome?.name ?? normalizedOutcome;
+  const resolvedTokenId = selectedOutcome?.tokenId ?? 'simulated-token';
   const liveTradingAllowed = isLiveTradingAllowed(env, telegramUserId);
-  const execution = liveTradingAllowed
-    ? await executeBuyOrder(env, {
-      market,
-      outcome: selectedOutcome?.name ?? normalizedOutcome,
-      tokenId: selectedOutcome?.tokenId ?? 'simulated-token',
-      amountUsdc,
-      account,
-    })
-    : {
-      mode: 'simulated' as const,
+
+  let execution: ExecuteBuyOrderResult;
+  if (liveTradingAllowed) {
+    try {
+      execution = await executeBuyOrder(env, {
+        market,
+        outcome: resolvedOutcome,
+        tokenId: resolvedTokenId,
+        amountUsdc,
+        account,
+        botId,
+        telegramUserId,
+        ...(typeof selectedOutcome?.price === 'number' ? { price: selectedOutcome.price } : {}),
+      });
+    } catch (error) {
+      if (error instanceof LiveOrderError) {
+        // 真实下单被拒/资金不足/签名失败：落一条审计记录，并给用户精准中文文案。
+        await recordFailedLiveOrder(env, {
+          telegramUserId,
+          botId,
+          market,
+          outcome: resolvedOutcome,
+          tokenId: resolvedTokenId,
+          amountUsdc,
+          error,
+        });
+        return buildBuyErrorReply(market, resolvedOutcome, amountUsdc, error);
+      }
+      throw error;
+    }
+  } else {
+    execution = {
+      mode: 'simulated',
       status: 'simulated_submitted',
       orderId: `sim-${Date.now()}`,
       detail: {
@@ -564,20 +611,21 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
       },
       builderAttribution: null,
     };
+  }
 
   const tradeEventId = await createTradeEvent(env, {
     telegramUserId,
     botId,
     eventType: 'buy',
     marketSlug: market.slug ?? market.question,
-    outcome: selectedOutcome?.name ?? normalizedOutcome,
-    tokenId: selectedOutcome?.tokenId ?? 'simulated-token',
+    outcome: resolvedOutcome,
+    tokenId: resolvedTokenId,
     amountUsdc,
     status: execution.status,
     orderId: execution.orderId,
     payloadJson: JSON.stringify({
       marketQuestion: market.question,
-      outcome: selectedOutcome?.name ?? normalizedOutcome,
+      outcome: resolvedOutcome,
       price: selectedOutcome?.price ?? null,
       mode: execution.mode,
       detail: execution.detail,
@@ -607,13 +655,52 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
 
   return buildSubmittedBuyReply(
     market,
-    selectedOutcome?.name ?? normalizedOutcome,
+    resolvedOutcome,
     amountUsdc,
     execution.orderId,
     execution.mode,
     execution.status,
     simulatedNote,
   );
+}
+
+interface FailedLiveOrderInput {
+  telegramUserId: string;
+  botId: string;
+  market: Awaited<ReturnType<typeof findBestMarket>>;
+  outcome: string;
+  tokenId: string;
+  amountUsdc: number;
+  error: LiveOrderError;
+}
+
+async function recordFailedLiveOrder(env: Env, input: FailedLiveOrderInput): Promise<void> {
+  const market = input.market;
+  if (!market) {
+    return;
+  }
+  await createTradeEvent(env, {
+    telegramUserId: input.telegramUserId,
+    botId: input.botId,
+    eventType: 'buy',
+    marketSlug: market.slug ?? market.question,
+    outcome: input.outcome,
+    tokenId: input.tokenId,
+    amountUsdc: input.amountUsdc,
+    status: 'live_failed',
+    orderId: null,
+    payloadJson: JSON.stringify({
+      marketQuestion: market.question,
+      outcome: input.outcome,
+      mode: 'live',
+      error: {
+        code: input.error.code,
+        message: input.error.message,
+        retryable: input.error.retryable,
+        http_status: input.error.httpStatus,
+      },
+    }),
+  });
 }
 
 function normalizeOutcome(value: string): string | null {

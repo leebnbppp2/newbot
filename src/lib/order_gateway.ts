@@ -13,6 +13,16 @@ export interface ExecuteBuyOrderInput {
   tokenId: string;
   amountUsdc: number;
   account: TradingAccountRow;
+  /** Bot/persona id; signer 据此选密钥与 L2 creds（CLOB v2 协议必填）。 */
+  botId: string;
+  /** Telegram user id；与 botId 一起定位 signer 侧的用户托管钱包。 */
+  telegramUserId: string;
+  /** 市价单可接受价上限（滑点保护）/限价单挂单价；缺省时不带。 */
+  price?: number;
+  /** 首发只用 BUY；预留 SELL（平仓）。 */
+  side?: OrderSide;
+  /** 市价买入默认 FOK；限价用 GTC/GTD。 */
+  orderType?: OrderType;
 }
 
 export interface ExecuteBuyOrderResult {
@@ -52,6 +62,33 @@ export interface BuilderAttributionDetail {
 export type RemoteDataSource = 'live' | 'cache' | 'none';
 
 export type TradingMode = 'live' | 'simulated';
+
+export type OrderSide = 'BUY' | 'SELL';
+
+export type OrderType = 'GTC' | 'GTD' | 'FOK' | 'FAK';
+
+/** Polymarket 官方 SignatureType 枚举：0 EOA / 1 POLY_PROXY / 2 POLY_GNOSIS_SAFE。 */
+export type SignatureTypeCode = 0 | 1 | 2;
+
+/**
+ * signer/CLOB 写类接口返回的结构化错误（对齐 PHASE_42_2_SIGNER_API.md §8 统一 envelope）。
+ * 携带可直接展示给用户的中文文案，便于 webhook 区分「资金/授权/签名/拒单」分别提示。
+ */
+export class LiveOrderError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly httpStatus: number;
+  readonly userMessage: string;
+
+  constructor(detail: { code: string; message: string; retryable: boolean; httpStatus: number; userMessage: string }) {
+    super(`Live order failed: ${detail.code} (HTTP ${detail.httpStatus})`);
+    this.name = 'LiveOrderError';
+    this.code = detail.code;
+    this.retryable = detail.retryable;
+    this.httpStatus = detail.httpStatus;
+    this.userMessage = detail.userMessage;
+  }
+}
 
 export interface RemoteCollectionResult<T> {
   items: T[];
@@ -111,7 +148,7 @@ export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Pr
 
   const payload = (await safeJson(response)) as { orderId?: string; status?: string; [key: string]: unknown };
   if (!response.ok) {
-    throw new Error(`Live order API failed: ${response.status}`);
+    throw mapLiveOrderError(payload, response.status);
   }
 
   return {
@@ -157,13 +194,21 @@ export async function enrichTradeEventsWithLiveStatus(env: Env, events: TradeEve
   return updated;
 }
 
-export async function cancelLiveOrder(env: Env, orderId: string, authMode: string): Promise<CancelOrderResult | null> {
+export async function cancelLiveOrder(
+  env: Env,
+  orderId: string,
+  authMode: string,
+  botId: string,
+  telegramUserId: string,
+): Promise<CancelOrderResult | null> {
   const liveConfig = getLiveOrderConfig(env);
   if (!liveConfig) {
     return null;
   }
 
   const requestBody = {
+    bot_id: botId,
+    telegram_user_id: telegramUserId,
     order_id: orderId,
     timestamp_ms: Date.now(),
     nonce: crypto.randomUUID().replaceAll('-', ''),
@@ -179,7 +224,7 @@ export async function cancelLiveOrder(env: Env, orderId: string, authMode: strin
   });
   const payload = (await safeJson(response)) as { orderId?: string; status?: string; [key: string]: unknown };
   if (!response.ok) {
-    throw new Error(`Live cancel API failed: ${response.status}`);
+    throw mapLiveOrderError(payload, response.status);
   }
 
   return {
@@ -353,14 +398,21 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
   const timestampMs = Date.now();
   const clientOrderId = `nbo-${timestampMs}-${crypto.randomUUID().slice(0, 8)}`;
   const nonce = crypto.randomUUID().replaceAll('-', '');
-  const signatureType = input.account.auth_mode === 'managed_signer' ? 'clob_delegate' : 'clob_wallet';
+  const signatureType = mapSignatureType(input.account.auth_mode);
+  const side: OrderSide = input.side ?? 'BUY';
+  const orderType: OrderType = input.orderType ?? 'FOK';
 
   return {
+    bot_id: input.botId,
+    telegram_user_id: input.telegramUserId,
     market_slug: input.market.slug ?? input.market.question,
     market_question: input.market.question,
     outcome: input.outcome,
     token_id: input.tokenId,
     amount_usdc: input.amountUsdc,
+    side,
+    order_type: orderType,
+    price: typeof input.price === 'number' ? input.price : null,
     signer_address: input.account.signer_address,
     funder_address: input.account.funder_address,
     auth_mode: input.account.auth_mode,
@@ -372,8 +424,58 @@ function buildLiveOrderPayload(input: ExecuteBuyOrderInput, builderTag: string |
     builder_api_key: builderApiKey,
     builder_api_key_hint: maskBuilderApiKey(builderApiKey),
     signature_type: signatureType,
-    protocol: 'polymarket_clob_v1',
+    protocol: ORDER_PROTOCOL_VERSION,
   };
+}
+
+/**
+ * Worker 的 auth_mode → 官方 SignatureType 整数枚举
+ * （PHASE_42_2_SIGNER_API.md §6）：wallet_signature=0 EOA / managed_signer=1 POLY_PROXY / gnosis=2。
+ */
+function mapSignatureType(authMode: string): SignatureTypeCode {
+  switch (authMode) {
+    case 'managed_signer':
+      return 1;
+    case 'gnosis_safe':
+    case 'poly_gnosis_safe':
+      return 2;
+    case 'wallet_signature':
+    default:
+      return 0;
+  }
+}
+
+/**
+ * 解析 signer 统一错误 envelope `{ error: { code, message, retryable } }`，
+ * 映射成带中文用户文案的 LiveOrderError（PHASE_42_2_SIGNER_API.md §8）。
+ */
+function mapLiveOrderError(payload: unknown, httpStatus: number): LiveOrderError {
+  const envelope = (payload as { error?: { code?: unknown; message?: unknown; retryable?: unknown } } | null)?.error;
+  const code = typeof envelope?.code === 'string' && envelope.code.length > 0 ? envelope.code : 'UNKNOWN';
+  const message = typeof envelope?.message === 'string' ? envelope.message : '';
+  const retryable = typeof envelope?.retryable === 'boolean' ? envelope.retryable : false;
+  return new LiveOrderError({ code, message, retryable, httpStatus, userMessage: userMessageForLiveOrderCode(code) });
+}
+
+function userMessageForLiveOrderCode(code: string): string {
+  switch (code) {
+    case 'INSUFFICIENT_BALANCE':
+      return '账户余额不足，先给交易账户充值后再下单。';
+    case 'INSUFFICIENT_ALLOWANCE':
+      return '链上授权还没完成。需要先给 USDC / 合约做一次授权，才能真正下单。';
+    case 'CREDS_NOT_READY':
+      return '你的交易账户还在开通中，稍等一下再发一次。';
+    case 'GEOBLOCKED':
+      return '当前地区暂时不支持真实下单。';
+    case 'ORDER_REJECTED':
+      return '这笔订单被拒了（价格、规模或最小变动价位不满足）。可以调整金额或稍后再试。';
+    case 'SIGNING_FAILED':
+      return '下单签名出了点问题，我已经记录。先别重复下单，稍后再试。';
+    case 'UPSTREAM_TIMEOUT':
+      return '下单服务暂时不可用，请稍后再试。';
+    default:
+      return '真实下单没有成功，我已经记录。你可以稍后再试，或发 /health 看系统状态。';
+  }
 }
 
 async function buildSignedHeaders(
@@ -444,10 +546,22 @@ async function fetchLiveOrderStatus(config: LiveOrderConfig, orderId: string): P
 }
 
 function normalizeLiveStatus(status: string | undefined): string {
-  if (status === 'submitted') return 'live_submitted';
-  if (status === 'matched') return 'live_matched';
-  if (status === 'cancelled') return 'live_cancelled';
-  return status ?? 'live_submitted';
+  // 对齐真实 CLOB 状态机（PHASE_42_2_SIGNER_API.md §7）。
+  switch (status) {
+    case 'live':
+    case 'submitted':
+      return 'live_submitted';
+    case 'matched':
+      return 'live_matched';
+    case 'cancelled':
+      return 'live_cancelled';
+    case 'delayed':
+      return 'live_delayed';
+    case 'unmatched':
+      return 'live_unmatched';
+    default:
+      return status ?? 'live_submitted';
+  }
 }
 
 function safeParseJson(value: string | null): unknown {

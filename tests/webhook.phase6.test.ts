@@ -436,7 +436,13 @@ describe('handleTelegramWebhook phase 6', () => {
         expect(payload.builder_tag).toBe('newbot-phase8');
         expect(payload.builder_api_key).toBe('builder-secret-key-1234');
         expect(payload.builder_api_key_hint).toBe('****1234');
-        expect(payload.signature_type).toBe('clob_delegate');
+        expect(payload.signature_type).toBe(1);
+        expect(payload.bot_id).toBe('crypto_zh');
+        expect(payload.telegram_user_id).toBe('1001');
+        expect(payload.side).toBe('BUY');
+        expect(payload.order_type).toBe('FOK');
+        expect(payload.price).toBe(0.61);
+        expect(payload.protocol).toBe('polymarket_clob_v2');
         expect(payload.client_order_id).toMatch(/^nbo-/);
         expect(typeof payload.timestamp_ms).toBe('number');
         expect(typeof payload.nonce).toBe('string');
@@ -625,7 +631,7 @@ describe('handleTelegramWebhook phase 6', () => {
       }
       if (url === 'https://orders.example.com/orders') {
         const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        expect(payload.signature_type).toBe('clob_wallet');
+        expect(payload.signature_type).toBe(0);
         expect(payload.builder_tag).toBe('newbot-phase9');
         return new Response(JSON.stringify({ orderId: 'live-wallet-1', status: 'submitted' }), { status: 200 });
       }
