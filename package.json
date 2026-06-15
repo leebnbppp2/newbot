@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p signer-service/tsconfig.json --noEmit",
+    "typecheck:worker": "tsc --noEmit",
+    "typecheck:signer": "tsc -p signer-service/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "node scripts/deploy.mjs deploy",
