@@ -5,6 +5,7 @@ import {
   buildClobOrderParams,
   executeBuyOrder,
   executeSellOrder,
+  fetchDepositWalletFills,
   fetchDepositWalletPositions,
   hasClobLiveConfig,
   type ExecuteBuyOrderInput,
@@ -127,6 +128,25 @@ describe('order_gateway sell path', () => {
     const positions = await fetchDepositWalletPositions(CLOB_ENV, account);
     expect(positions).toHaveLength(1);
     expect(positions[0]).toMatchObject({ outcome: 'Yes', size: 4 });
+  });
+
+  it('fetchDepositWalletFills reads the sidecar /fills endpoint (real trade history)', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, depositWallet: '0xDW', fills: [{ marketSlug: 'mkt', outcome: 'Yes', amountUsdc: 2, price: 0.5, side: 'BUY' }] }),
+        { status: 200 },
+      ),
+    );
+    const fills = await fetchDepositWalletFills(CLOB_ENV, account);
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(String(url)).toContain('/fills');
+    expect(fills).toHaveLength(1);
+    expect(fills[0]).toMatchObject({ side: 'BUY', amountUsdc: 2, price: 0.5, outcome: 'Yes' });
+  });
+
+  it('fetchDepositWalletFills returns [] without a provisioned wallet', async () => {
+    const noWallet = { ...account, privy_wallet_id: null };
+    expect(await fetchDepositWalletFills(CLOB_ENV, noWallet)).toEqual([]);
   });
 
   it('buildSellPositionsReply renders 卖全部/卖一半 buttons keyed by a short token id', () => {

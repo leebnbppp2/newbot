@@ -57,6 +57,7 @@ import {
   enrichTradeEventsWithLiveStatus,
   executeBuyOrder,
   executeSellOrder,
+  fetchDepositWalletFills,
   fetchDepositWalletPositions,
   fetchLiveOpenOrders,
   fetchRemoteFills,
@@ -246,6 +247,10 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
 
   if (normalized.startsWith('/openorders')) {
     const page = parseCommandPage(text);
+    // Path A live users trade FOK market orders, which fill immediately and never rest → no open orders.
+    if (await liveProvisionedAccount(env, botId, telegramUserId)) {
+      return buildOpenOrdersReply([], page, 2, 'live', '市价单即时成交,通常没有挂单。查成交记录用 /fills,减仓用 /sell。');
+    }
     const result = await fetchLiveOpenOrders(env, telegramUserId, botId);
     return buildOpenOrdersReply(result.items, page, 2, result.source, result.warning);
   }
@@ -272,6 +277,12 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
 
   if (normalized.startsWith('/fills')) {
     const page = parseCommandPage(text);
+    // Path A live users: real fills from the deposit wallet via the sidecar (Polymarket Data API /trades).
+    const liveAccount = await liveProvisionedAccount(env, botId, telegramUserId);
+    if (liveAccount) {
+      const fills = await fetchDepositWalletFills(env, liveAccount);
+      return buildFillsReply(fills, page, 2, 'live', null);
+    }
     const fillsResult = await fetchRemoteFills(env, telegramUserId, botId);
     return buildFillsReply(fillsResult.items, page, 2, fillsResult.source, fillsResult.warning);
   }
@@ -526,7 +537,7 @@ async function cancelOrderReply(env: Env, telegramUserId: string, botId: string,
   }
   if (!cancelled) {
     return {
-      text: '当前还没配置真实下单 API，所以这笔 live 订单暂时没法撤。',
+      text: '这笔是市价单,已经即时成交,没法撤单。要减仓请用 /sell 卖出对应持仓。',
     };
   }
 
@@ -743,13 +754,19 @@ async function loadSellablePositions(
   );
 }
 
-/** Sellable-positions view for live users; null when live trading isn't configured / not provisioned. */
-async function maybeSellPositionsReply(env: Env, botId: string, telegramUserId: string) {
+/** The user's account when Path A live trading is configured AND they're provisioned; else null. */
+async function liveProvisionedAccount(env: Env, botId: string, telegramUserId: string): Promise<SellableAccount | null> {
   if (!hasClobLiveConfig(env)) {
     return null;
   }
   const account = await getTradingAccount(env, telegramUserId, botId);
-  if (!account?.privy_wallet_id) {
+  return account?.privy_wallet_id ? account : null;
+}
+
+/** Sellable-positions view for live users; null when live trading isn't configured / not provisioned. */
+async function maybeSellPositionsReply(env: Env, botId: string, telegramUserId: string) {
+  const account = await liveProvisionedAccount(env, botId, telegramUserId);
+  if (!account) {
     return null;
   }
   const positions = await loadSellablePositions(env, account, botId, telegramUserId);

@@ -395,6 +395,34 @@ export async function fetchDepositWalletPositions(env: Env, account: TradingAcco
 }
 
 /**
+ * Read the user's fills (trade history) via the sidecar's `/fills`, which derives the deposit
+ * wallet and proxies the public Polymarket Data API `/trades`. The sidecar returns RemoteFill-shaped
+ * rows. Returns [] when unavailable / not provisioned. (Supersedes the dead POLYMARKET_ORDER_API_BASE
+ * `/portfolio/fills` path for Path A users.)
+ */
+export async function fetchDepositWalletFills(env: Env, account: TradingAccountRow): Promise<RemoteFill[]> {
+  if (!account.privy_wallet_id) {
+    return [];
+  }
+  const url = (env.ORDER_SERVICE_URL ?? 'http://127.0.0.1:8799').replace(/\/$/, '');
+  const token = env.ORDER_SERVICE_TOKEN ?? 'local-newbot';
+  try {
+    const resp = await fetch(`${url}/fills`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-order-token': token },
+      body: JSON.stringify({ walletId: account.privy_wallet_id, eoaAddress: account.signer_address }),
+    });
+    if (!resp.ok) {
+      return [];
+    }
+    const data = (await resp.json()) as { ok?: boolean; fills?: RemoteFill[] };
+    return Array.isArray(data.fills) ? data.fills : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Weighted-average cost per share from BUY rows, using each buy's recorded `price` (in payload)
  * and USDC spent: avg = Σamount / Σ(amount / price). Returns null when no priced buy is found.
  * Used to reconstruct a cost basis for P&L when the positions feed doesn't carry `avgPrice`.
