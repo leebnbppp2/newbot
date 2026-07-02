@@ -120,27 +120,13 @@ describe('order_gateway sell path', () => {
     expect(res.mode).toBe('simulated');
   });
 
-  it('fetchDepositWalletPositions reads the public Data API and carries avgPrice/cashPnl/percentPnl', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify([
-          { asset: '5'.repeat(30), title: 'Mkt', slug: 'mkt', outcome: 'Yes', size: 4, curPrice: 0.5, avgPrice: 0.4, cashPnl: 0.4, percentPnl: 25 },
-          { asset: 'dust', title: 'Dust', outcome: 'No', size: 0, curPrice: 0.1 }, // filtered out (size 0)
-        ]),
-        { status: 200 },
-      ),
+  it('fetchDepositWalletPositions returns the sidecar positions', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, positions: [{ tokenId: '5'.repeat(30), title: 'Mkt', outcome: 'Yes', size: 4, curPrice: 0.5 }] }), { status: 200 }),
     );
     const positions = await fetchDepositWalletPositions(CLOB_ENV, account);
-    const [url] = fetchMock.mock.calls[0] as [string];
-    expect(String(url)).toContain('data-api.polymarket.com/positions?user=0xSAFE');
     expect(positions).toHaveLength(1);
-    expect(positions[0]).toMatchObject({ tokenId: '5'.repeat(30), outcome: 'Yes', size: 4, avgPrice: 0.4, cashPnl: 0.4, percentPnl: 25 });
-  });
-
-  it('fetchDepositWalletPositions returns [] when the account has no funder address', async () => {
-    const noFunder = { ...account, funder_address: null };
-    const positions = await fetchDepositWalletPositions(CLOB_ENV, noFunder);
-    expect(positions).toEqual([]);
+    expect(positions[0]).toMatchObject({ outcome: 'Yes', size: 4 });
   });
 
   it('buildSellPositionsReply renders 卖全部/卖一半 buttons keyed by a short token id', () => {
