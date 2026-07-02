@@ -9,6 +9,7 @@ import {
   buildBuyConfirmReply,
   buildBuyErrorReply,
   buildDefaultReply,
+  buildDuplicateOrderReply,
   buildFillsReply,
   buildGettingStartedReply,
   buildHealthReply,
@@ -38,6 +39,7 @@ import {
   getSmokeReportMetrics,
 } from '../db/cron_runs';
 import { appendConversationTurn } from '../db/conversations';
+import { claimIdempotencyKey } from '../db/idempotency';
 import {
   createTradeEvent,
   getTradeEventByOrderId,
@@ -61,6 +63,7 @@ import {
   fetchRemotePositions,
   fetchWalletInfo,
   getOrderGatewayReadiness,
+  getTradingMode,
   hasClobLiveConfig,
   LiveOrderError,
 } from '../lib/order_gateway';
@@ -118,10 +121,11 @@ export async function handleTelegramWebhook(request: Request, env: Env, personaI
   }
 
   const payload = (await request.json()) as TelegramUpdate;
+  const updateId = typeof payload.update_id === 'number' ? String(payload.update_id) : undefined;
 
   try {
     if (payload.callback_query) {
-      await handleCallbackQuery(env, persona.id, persona.telegramBotTokenSecretName, payload.callback_query);
+      await handleCallbackQuery(env, persona.id, persona.telegramBotTokenSecretName, payload.callback_query, updateId);
     } else if (payload.message?.text?.trim() && typeof payload.message.chat.id !== 'undefined' && typeof payload.message.from?.id !== 'undefined') {
       await upsertTelegramUser(env, persona.id, payload.message);
 
@@ -130,7 +134,7 @@ export async function handleTelegramWebhook(request: Request, env: Env, personaI
       const conversationUserId = `${persona.id}:${telegramUserId}`;
       await appendConversationTurn(env, conversationUserId, 'user', text);
 
-      const reply = await resolveReply(env, persona.id, telegramUserId, text);
+      const reply = await resolveReply(env, persona.id, telegramUserId, text, updateId);
       await appendConversationTurn(env, conversationUserId, 'assistant', reply.text);
       await sendTelegramMessage(env, persona.telegramBotTokenSecretName, payload.message.chat.id, reply);
     }
@@ -149,6 +153,7 @@ async function handleCallbackQuery(
   botId: string,
   secretName: 'BOT_TOKEN_CRYPTO_ZH',
   callbackQuery: TelegramCallbackQuery,
+  updateId?: string,
 ): Promise<void> {
   const data = callbackQuery.data?.trim();
   const chatId = callbackQuery.message?.chat.id;
@@ -162,14 +167,14 @@ async function handleCallbackQuery(
   const conversationUserId = `${botId}:${telegramUserId}`;
   await appendConversationTurn(env, conversationUserId, 'user', `[callback] ${data}`);
 
-  const callbackResult = await resolveCallbackReply(env, botId, telegramUserId, data);
+  const callbackResult = await resolveCallbackReply(env, botId, telegramUserId, data, updateId);
   await appendConversationTurn(env, conversationUserId, 'assistant', callbackResult.reply.text);
 
   await answerCallbackQuery(env, secretName, callbackQuery.id, callbackResult.callbackToast);
   await editTelegramMessage(env, secretName, chatId, messageId, callbackResult.reply);
 }
 
-async function resolveReply(env: Env, botId: string, telegramUserId: string, text: string) {
+async function resolveReply(env: Env, botId: string, telegramUserId: string, text: string, updateId?: string) {
   const normalized = text.toLowerCase();
 
   if (normalized === '/start' || normalized === '/menu') {
@@ -293,13 +298,13 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
   }
 
   if (normalized.startsWith('/buy ')) {
-    return resolveBuyReply(env, botId, telegramUserId, text.trim());
+    return resolveBuyReply(env, botId, telegramUserId, text.trim(), updateId);
   }
 
   return buildDefaultReply();
 }
 
-async function resolveCallbackReply(env: Env, botId: string, telegramUserId: string, data: string): Promise<CallbackReplyResult> {
+async function resolveCallbackReply(env: Env, botId: string, telegramUserId: string, data: string, updateId?: string): Promise<CallbackReplyResult> {
   // --- Button-driven buy flow: pick outcome (bp) -> amount (ba) -> confirm+place (bg) ---
   if (data.startsWith('bp:') || data.startsWith('ba:') || data.startsWith('bg:')) {
     const parts = data.split(':');
@@ -324,7 +329,7 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
     // bg: place the real order — reuse the exact /buy path via a synthetic command.
     // The market slug is a single hyphenated token, so it round-trips through /buy parsing.
     const marketQuery = market.slug ?? market.question;
-    const reply = await resolveBuyReply(env, botId, telegramUserId, `/buy ${marketQuery} ${outcome.name} ${amt}`);
+    const reply = await resolveBuyReply(env, botId, telegramUserId, `/buy ${marketQuery} ${outcome.name} ${amt}`, updateId);
     return { reply, callbackToast: { text: '下单中…', showAlert: false } };
   }
 
@@ -863,7 +868,7 @@ async function resolveSellExecute(
   };
 }
 
-async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, rawText: string) {
+async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, rawText: string, updateId?: string) {
   const accountStatus = await getTradingAccountStatus(env, telegramUserId, botId);
   if (!accountStatus) {
     return buildTradeEntryReply(false);
@@ -925,6 +930,25 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
           }),
         );
       }
+    }
+  }
+
+  // G7 幂等:真实下单约 4s,Telegram 超时会重投同一 update → 用 update_id 去重,避免重复下单。
+  // 失败开放(claim 出错/DB 不支持时放行),幂等是纵深防御而非下单前置条件。
+  if (getTradingMode(env) === 'live' && liveTradingAllowed && updateId) {
+    let firstDelivery = true;
+    try {
+      firstDelivery = await claimIdempotencyKey(
+        env,
+        `buy:${botId}:${telegramUserId}:${updateId}`,
+        'buy',
+        JSON.stringify({ tokenId: resolvedTokenId, amountUsdc }),
+      );
+    } catch (error) {
+      console.error('idempotency claim failed (fail-open)', error);
+    }
+    if (!firstDelivery) {
+      return buildDuplicateOrderReply();
     }
   }
 

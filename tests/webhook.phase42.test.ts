@@ -69,6 +69,8 @@ class FakeD1 {
 
   marketCache = new Map<string, CacheRow>();
 
+  idempotencyKeys = new Set<string>();
+
   prepare(query: string) {
     return new FakePreparedStatement(this, query);
   }
@@ -216,6 +218,13 @@ class FakePreparedStatement {
       return { success: true };
     }
 
+    if (this.query.includes('INSERT OR IGNORE INTO idempotency_keys')) {
+      const [key] = this.values as [string];
+      const isNew = !this.db.idempotencyKeys.has(key);
+      this.db.idempotencyKeys.add(key);
+      return { success: true, meta: { changes: isNew ? 1 : 0 } };
+    }
+
     throw new Error(`Unsupported run query: ${this.query}`);
   }
 }
@@ -333,6 +342,34 @@ describe('handleTelegramWebhook phase 42 — real CLOB protocol alignment', () =
     expect(db.tradeEvents).toHaveLength(1);
     expect(db.tradeEvents[0]).toMatchObject({ status: 'live_submitted', order_id: 'live-ord-42' });
     expect(lastTelegramText(fetchMock)).toContain('真实下单请求已经发出');
+  });
+
+  it('does NOT place a second live order when the same Telegram update is re-delivered (idempotent /buy)', async () => {
+    const db = new FakeD1();
+    seedManagedAccount(db);
+    const env = makeEnv(db);
+    let orderCalls = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify([BTC_MARKET]), { status: 200 });
+      }
+      if (url === 'https://orders.example.com/orders') {
+        orderCalls += 1;
+        return new Response(JSON.stringify({ orderId: 'live-ord-42', status: 'live' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    // Same update_id (makeMessageRequest hardcodes update_id: 1) delivered twice.
+    const first = await handleTelegramWebhook(makeMessageRequest('/buy btc yes 50'), env, 'crypto_zh');
+    const second = await handleTelegramWebhook(makeMessageRequest('/buy btc yes 50'), env, 'crypto_zh');
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    // The order endpoint and the trade_events row must happen exactly once.
+    expect(orderCalls).toBe(1);
+    expect(db.tradeEvents).toHaveLength(1);
   });
 
   it('maps wallet_signature to EOA (0) and gnosis_safe to POLY_GNOSIS_SAFE (2)', async () => {

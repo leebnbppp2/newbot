@@ -753,6 +753,14 @@ export function buildOperatorOnlyReply(): BotReply {
   };
 }
 
+/** Shown when the same order request is re-delivered (Telegram retry / double-tap) — no double order. */
+export function buildDuplicateOrderReply(): BotReply {
+  return {
+    text: '这笔下单刚刚已经在处理了,没有重复提交。稍等几秒发 /orders 看订单,或 /positions 看持仓。',
+    replyMarkup: buildMainMenuMarkup(),
+  };
+}
+
 export function buildHealthReply(readiness: OrderGatewayReadiness): BotReply {
   const warningLines = readiness.warnings.length > 0
     ? readiness.warnings.map((warning) => `- ${warning}`)
