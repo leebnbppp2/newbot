@@ -2,10 +2,14 @@
  * Phase 17 order gateway: lifecycle + portfolio reads + local cache.
  */
 
-import type { RemoteFill, RemoteOpenOrder, RemotePosition, MarketItem } from '../agent/replies';
+import type { RemoteFill, RemoteOpenOrder, RemotePosition, MarketItem, SellablePosition } from '../agent/replies';
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
 import type { Env } from '../types';
+import { getTradingCredentials, upsertTradingCredentials } from '../db/trading_credentials';
+import { decryptL2Creds, encryptL2Creds } from './creds_crypto';
+import { privyClientFromEnv, walletClientForUser } from './privy_signer';
+import { builderConfigFromEnv, deriveL2Creds, makeClobClient, placeMarketBuyOrder, type PlaceOrderParams } from './polymarket_clob';
 
 export interface ExecuteBuyOrderInput {
   market: MarketItem;
@@ -102,6 +106,10 @@ export interface OrderGatewayReadiness {
   signing: boolean;
   builderAttribution: 'ready' | 'partial' | 'disabled';
   liveTradingAllowlist: boolean;
+  /** Phase 44 Path A:进程内 Privy + CLOB 直连是否就绪(全局配置层面)。 */
+  clobLive: boolean;
+  privyConfigured: boolean;
+  credsEncryption: boolean;
   warnings: string[];
 }
 
@@ -117,24 +125,27 @@ interface SignatureEnvelope {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const ORDER_PROTOCOL_VERSION = 'polymarket_clob_v2';
 
-export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Promise<ExecuteBuyOrderResult> {
-  const liveConfig = getLiveOrderConfig(env);
+export async function executeBuyOrder(
+  env: Env,
+  input: ExecuteBuyOrderInput,
+  deps: ExecuteBuyOrderDeps = {},
+): Promise<ExecuteBuyOrderResult> {
   const tradingMode = getTradingMode(env);
-  // 全局主开关优先：未设为 live 时，即使 live API 已配置也强制模拟单。
-  if (tradingMode !== 'live' || !liveConfig) {
-    const simulatedByMode = tradingMode !== 'live';
-    return {
-      mode: 'simulated',
-      status: 'simulated_submitted',
-      orderId: `sim-${Date.now()}`,
-      detail: {
-        reason: simulatedByMode ? 'trading_mode_simulated' : 'missing_live_order_config',
-        message: simulatedByMode
-          ? '交易主开关 NEWBOT_TRADING_MODE 未设为 live，先按模拟单记录。'
-          : '还没接入真实下单 API，先按模拟单记录。',
-      },
-      builderAttribution: null,
-    };
+  // 全局主开关优先：未设为 live 时强制模拟单。
+  if (tradingMode !== 'live') {
+    return simulatedResult('trading_mode_simulated', '交易主开关 NEWBOT_TRADING_MODE 未设为 live，先按模拟单记录。');
+  }
+
+  // Path A (Phase 44)：进程内 Privy + CLOB 直连，配置就绪时优先走真实下单。
+  if (hasClobLiveConfig(env)) {
+    const placeClob = deps.placeClobOrder ?? placeClobOrderLive;
+    return placeClob(env, input);
+  }
+
+  // Legacy 远端 signer 路径（G8 退役）：CLOB 未配置时回退；都没配置则模拟单。
+  const liveConfig = getLiveOrderConfig(env);
+  if (!liveConfig) {
+    return simulatedResult('missing_live_order_config', '还没接入真实下单（Privy/CLOB 或远端 signer 均未配置），先按模拟单记录。');
   }
 
   const requestBody = buildLiveOrderPayload(input, liveConfig.builderTag, liveConfig.builderApiKey);
@@ -164,6 +175,289 @@ export async function executeBuyOrder(env: Env, input: ExecuteBuyOrderInput): Pr
       signature_envelope: signing.signatureEnvelope,
     },
     builderAttribution: buildBuilderAttributionDetail(liveConfig),
+  };
+}
+
+export interface ExecuteBuyOrderDeps {
+  /** Injectable for tests; defaults to the real in-Worker Privy + CLOB path. */
+  placeClobOrder?: (env: Env, input: ExecuteBuyOrderInput) => Promise<ExecuteBuyOrderResult>;
+}
+
+function simulatedResult(reason: string, message: string): ExecuteBuyOrderResult {
+  return {
+    mode: 'simulated',
+    status: 'simulated_submitted',
+    orderId: `sim-${Date.now()}`,
+    detail: { reason, message },
+    builderAttribution: null,
+  };
+}
+
+/** Phase 44 Path A config gate: Privy app + authorization key + CLOB host all present. */
+export function hasClobLiveConfig(env: Env): boolean {
+  return Boolean(
+    env.PRIVY_APP_ID?.trim() &&
+      env.PRIVY_APP_SECRET?.trim() &&
+      env.PRIVY_AUTHORIZATION_PRIVATE_KEY?.trim() &&
+      env.POLYMARKET_CLOB_HOST?.trim(),
+  );
+}
+
+/**
+ * Map a NewBot buy into CLOB order params. A live buy needs a 0<price<1 (the
+ * outcome probability); size = amount_usdc / price shares.
+ */
+export function buildClobOrderParams(input: ExecuteBuyOrderInput): PlaceOrderParams {
+  const price = input.price;
+  if (typeof price !== 'number' || price <= 0 || price >= 1) {
+    throw new LiveOrderError({
+      code: 'ORDER_REJECTED',
+      message: 'live CLOB order requires a price in (0,1)',
+      retryable: false,
+      httpStatus: 400,
+      userMessage: '真实下单需要一个 0~1 之间的价格（概率）。请带价格再试，例如 /buy <市场> yes 50 0.62。',
+    });
+  }
+  return { tokenId: input.tokenId, price, size: input.amountUsdc / price };
+}
+
+/**
+ * Phase 44 (final): place a real Polymarket V2 order via the local order-service
+ * sidecar, which runs `@polymarket/client` (SecureClient) with the user's Privy
+ * wallet — its deterministic V2 Deposit Wallet is the funder — plus our builder
+ * key for commission attribution. (clob-client-v2 was the broken SDK that V2
+ * rejects; @polymarket/client is the maintained one but uses node APIs that
+ * can't run in workerd, so the Worker calls it over localhost.)
+ */
+interface SidecarPlaceResult {
+  ok?: boolean;
+  orderId?: string;
+  status?: string;
+  raw?: unknown;
+  wallet?: string;
+  error?: string;
+}
+
+/**
+ * POST a BUY (amount = USDC) or SELL (amount = shares) to the local order-service
+ * sidecar's `/place`, mapping its 402 (auto-wrap can't cover the buy) and generic
+ * failures to LiveOrderError. Shared by both the buy and sell paths.
+ */
+async function postSidecarOrder(
+  env: Env,
+  account: TradingAccountRow,
+  params: { tokenId: string; amount: number; side: OrderSide },
+): Promise<SidecarPlaceResult> {
+  const url = (env.ORDER_SERVICE_URL ?? 'http://127.0.0.1:8799').replace(/\/$/, '');
+  const token = env.ORDER_SERVICE_TOKEN ?? 'local-newbot';
+  try {
+    const resp = await fetch(`${url}/place`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-order-token': token },
+      body: JSON.stringify({
+        walletId: account.privy_wallet_id,
+        eoaAddress: account.signer_address,
+        safeAddress: account.funder_address,
+        tokenId: params.tokenId,
+        amount: params.amount,
+        side: params.side,
+      }),
+    });
+    const data = (await resp.json()) as SidecarPlaceResult;
+    if (resp.status === 402) {
+      // Sidecar auto-wrap found the user's Safe + deposit wallet can't cover this buy.
+      throw new LiveOrderError({
+        code: 'INSUFFICIENT_FUNDS',
+        message: data.error ?? 'insufficient funds',
+        retryable: false,
+        httpStatus: 402,
+        userMessage: '余额不足。请先向你的充值地址转入 USDC.e（可发 /deposit 查看地址和当前余额），到账后再下单。',
+      });
+    }
+    if (!resp.ok || data.ok === false) {
+      throw new LiveOrderError({
+        code: 'ORDER_REJECTED',
+        message: data.error ?? `order service HTTP ${resp.status}`,
+        retryable: false,
+        httpStatus: 502,
+        userMessage: userMessageForLiveOrderCode('ORDER_REJECTED'),
+      });
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof LiveOrderError) {
+      throw error;
+    }
+    throw new LiveOrderError({
+      code: 'ORDER_REJECTED',
+      message: error instanceof Error ? error.message : String(error),
+      retryable: false,
+      httpStatus: 502,
+      userMessage: userMessageForLiveOrderCode('ORDER_REJECTED'),
+    });
+  }
+}
+
+async function placeClobOrderLive(env: Env, input: ExecuteBuyOrderInput): Promise<ExecuteBuyOrderResult> {
+  const account = input.account;
+  if (!account.privy_wallet_id || !account.signer_address || !account.funder_address) {
+    throw credsNotReady('wallet not provisioned');
+  }
+  const builderAttribution = builderAttributionFromEnv(env);
+  const data = await postSidecarOrder(env, account, { tokenId: input.tokenId, amount: input.amountUsdc, side: 'BUY' });
+
+  return {
+    mode: 'live',
+    status: normalizeLiveStatus(data.status ?? 'matched'),
+    orderId: data.orderId || `clob-${Date.now()}`,
+    detail: {
+      order: data.raw,
+      token_id: input.tokenId,
+      amount_usdc: input.amountUsdc,
+      funder_address: data.wallet ?? account.funder_address,
+      signature_type: 3,
+      protocol: ORDER_PROTOCOL_VERSION,
+      builder_attribution: builderAttribution,
+    },
+    builderAttribution,
+  };
+}
+
+export interface ExecuteSellOrderInput {
+  account: TradingAccountRow;
+  tokenId: string;
+  /** Number of outcome shares to sell (market SELL amount is shares, not USDC). */
+  shares: number;
+  botId: string;
+  telegramUserId: string;
+}
+
+/**
+ * Sell (close) an outcome position via the sidecar. Mirrors executeBuyOrder's gating
+ * (global trading-mode switch + Path A config), but the market SELL amount is shares.
+ */
+export async function executeSellOrder(env: Env, input: ExecuteSellOrderInput): Promise<ExecuteBuyOrderResult> {
+  if (getTradingMode(env) !== 'live') {
+    return simulatedResult('trading_mode_simulated', '交易主开关 NEWBOT_TRADING_MODE 未设为 live，先按模拟单记录。');
+  }
+  if (!hasClobLiveConfig(env)) {
+    return simulatedResult('missing_live_order_config', '还没接入真实下单（Privy/CLOB 未配置），先按模拟单记录。');
+  }
+  const account = input.account;
+  if (!account.privy_wallet_id || !account.signer_address || !account.funder_address) {
+    throw credsNotReady('wallet not provisioned');
+  }
+  const builderAttribution = builderAttributionFromEnv(env);
+  const data = await postSidecarOrder(env, account, { tokenId: input.tokenId, amount: input.shares, side: 'SELL' });
+
+  return {
+    mode: 'live',
+    status: normalizeLiveStatus(data.status ?? 'matched'),
+    orderId: data.orderId || `clob-sell-${Date.now()}`,
+    detail: {
+      order: data.raw,
+      token_id: input.tokenId,
+      shares: input.shares,
+      side: 'SELL',
+      funder_address: data.wallet ?? account.funder_address,
+      signature_type: 3,
+      protocol: ORDER_PROTOCOL_VERSION,
+      builder_attribution: builderAttribution,
+    },
+    builderAttribution,
+  };
+}
+
+/**
+ * Read the user's deposit-wallet positions (for selling) via the sidecar's `/positions`,
+ * which proxies the Polymarket data API. Returns [] when unavailable / not provisioned.
+ */
+export async function fetchDepositWalletPositions(env: Env, account: TradingAccountRow): Promise<SellablePosition[]> {
+  if (!account.privy_wallet_id) {
+    return [];
+  }
+  const url = (env.ORDER_SERVICE_URL ?? 'http://127.0.0.1:8799').replace(/\/$/, '');
+  const token = env.ORDER_SERVICE_TOKEN ?? 'local-newbot';
+  try {
+    const resp = await fetch(`${url}/positions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-order-token': token },
+      body: JSON.stringify({ walletId: account.privy_wallet_id, eoaAddress: account.signer_address }),
+    });
+    if (!resp.ok) {
+      return [];
+    }
+    const data = (await resp.json()) as { ok?: boolean; positions?: SellablePosition[] };
+    return Array.isArray(data.positions) ? data.positions : [];
+  } catch {
+    return [];
+  }
+}
+
+export interface WalletInfo {
+  depositWallet: string;
+  safe: string | null;
+  balances: { depositPusd: string; depositUsdce: string; safeUsdce: string };
+}
+
+/**
+ * Read-only balance snapshot for a user's trading wallet, via the local sidecar's
+ * `/wallet` endpoint. Powers /deposit so users see their real deposit wallet + balances.
+ * Returns null when the sidecar is unavailable or the wallet isn't provisioned.
+ */
+export async function fetchWalletInfo(env: Env, account: TradingAccountRow): Promise<WalletInfo | null> {
+  if (!account.privy_wallet_id) {
+    return null;
+  }
+  const url = (env.ORDER_SERVICE_URL ?? 'http://127.0.0.1:8799').replace(/\/$/, '');
+  const token = env.ORDER_SERVICE_TOKEN ?? 'local-newbot';
+  try {
+    const resp = await fetch(`${url}/wallet`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-order-token': token },
+      body: JSON.stringify({
+        walletId: account.privy_wallet_id,
+        eoaAddress: account.signer_address,
+        safeAddress: account.funder_address,
+      }),
+    });
+    if (!resp.ok) {
+      return null;
+    }
+    const data = (await resp.json()) as Partial<WalletInfo> & { ok?: boolean };
+    if (!data.depositWallet || !data.balances) {
+      return null;
+    }
+    return { depositWallet: data.depositWallet, safe: data.safe ?? null, balances: data.balances };
+  } catch {
+    return null;
+  }
+}
+
+function credsNotReady(message: string): LiveOrderError {
+  return new LiveOrderError({
+    code: 'CREDS_NOT_READY',
+    message,
+    retryable: false,
+    httpStatus: 409,
+    userMessage: userMessageForLiveOrderCode('CREDS_NOT_READY'),
+  });
+}
+
+function builderAttributionFromEnv(env: Env): BuilderAttributionDetail | null {
+  const tag = env.POLYMARKET_BUILDER_TAG?.trim() || null;
+  const key = env.POLYMARKET_BUILDER_API_KEY?.trim() || null;
+  if (!tag && !key) {
+    return null;
+  }
+  const active = Boolean(
+    key && env.POLYMARKET_BUILDER_API_SECRET?.trim() && env.POLYMARKET_BUILDER_PASSPHRASE?.trim(),
+  );
+  return {
+    active,
+    builderTag: tag,
+    builderApiKeyHint: maskBuilderApiKey(key),
+    attributionMode: 'builder_program',
   };
 }
 
@@ -301,8 +595,12 @@ export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
   const tradingMode = getTradingMode(env);
   const warnings: string[] = [];
 
-  if (!baseUrl || !apiKey) {
-    warnings.push('live order API 还没完整配置。');
+  const clobLive = hasClobLiveConfig(env);
+  if (!clobLive && (!baseUrl || !apiKey)) {
+    warnings.push('真实下单还没配置（Path A 的 Privy/CLOB 或 legacy live order API 均未就绪）。');
+  }
+  if (clobLive && tradingMode !== 'live') {
+    warnings.push('Path A 已配置，但 NEWBOT_TRADING_MODE 未设为 live：所有下单仍走模拟单，设为 live 才会真实成交。');
   }
   if ((builderTag && !builderApiKey) || (!builderTag && builderApiKey)) {
     warnings.push('Builder Program 配置不完整，归因暂时不会完整生效。');
@@ -312,6 +610,16 @@ export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
   }
   if (tradingMode !== 'live' && baseUrl && apiKey) {
     warnings.push('交易主开关 NEWBOT_TRADING_MODE 未设为 live：即使 live API 已配置，所有下单也会强制走模拟单。');
+  }
+
+  const privyConfigured = Boolean(env.PRIVY_APP_ID?.trim() && env.PRIVY_APP_SECRET?.trim());
+  const credsEncryption = Boolean(env.NEWBOT_CREDS_ENCRYPTION_KEY?.trim());
+
+  if (tradingMode === 'live' && clobLive && !credsEncryption) {
+    warnings.push('NEWBOT_CREDS_ENCRYPTION_KEY 未配置：无法解密用户 L2 creds，真实下单会失败。');
+  }
+  if (tradingMode === 'live' && clobLive && !env.POLYGON_RPC_URL?.trim()) {
+    warnings.push('POLYGON_RPC_URL 未配置：Privy 签名 / 链上调用可能失败。');
   }
 
   const builderAttribution = builderTag && builderApiKey
@@ -324,6 +632,9 @@ export function getOrderGatewayReadiness(env: Env): OrderGatewayReadiness {
     signing: Boolean(baseUrl && apiKey && signingSecret),
     builderAttribution,
     liveTradingAllowlist: Boolean(liveTradingAllowlist),
+    clobLive,
+    privyConfigured,
+    credsEncryption,
     warnings,
   };
 }

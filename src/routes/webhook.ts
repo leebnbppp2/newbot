@@ -4,6 +4,8 @@
 
 import {
   buildAccountReply,
+  buildBuyAmountReply,
+  buildBuyConfirmButtonReply,
   buildBuyConfirmReply,
   buildBuyErrorReply,
   buildDefaultReply,
@@ -17,11 +19,16 @@ import {
   buildPositionsReply,
   buildRemotePositionsReply,
   buildRunbookReply,
+  buildSellConfirmReply,
+  buildSellPositionsReply,
+  buildSellSubmittedReply,
   buildSmokeMetricsReply,
   buildStartReply,
   buildSubmittedBuyReply,
   buildTradeEntryReply,
+  tokenKey,
 } from '../agent/replies';
+import type { SellablePosition } from '../agent/replies';
 import { createAccountLinkSession } from '../db/account_sessions';
 import { createBuilderAttribution } from '../db/builder_attributions';
 import {
@@ -35,21 +42,30 @@ import {
   createTradeEvent,
   getTradeEventByOrderId,
   listRecentTradeEvents,
+  sumTodaysLiveBuyUsdc,
   updateTradeEventStatus,
 } from '../db/trade_events';
+import { checkTradeLimits, parseTradeLimitsFromEnv } from '../lib/trade_limits';
 import { getTradingAccount, getTradingAccountStatus, upsertTelegramUser } from '../db/users';
-import { findBestMarket, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
+import { findBestMarket, findMarketById, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
 import {
   cancelLiveOrder,
   enrichTradeEventsWithLiveStatus,
   executeBuyOrder,
+  executeSellOrder,
+  fetchDepositWalletPositions,
   fetchLiveOpenOrders,
   fetchRemoteFills,
   fetchRemotePositions,
+  fetchWalletInfo,
   getOrderGatewayReadiness,
+  hasClobLiveConfig,
   LiveOrderError,
 } from '../lib/order_gateway';
 import type { ExecuteBuyOrderResult } from '../lib/order_gateway';
+import { provisionTradingWallet } from '../lib/onboarding';
+import { ensureSafeReady } from '../lib/safe_setup';
+import { polymarketContracts } from '../lib/polymarket_clob';
 import { answerCallbackQuery, editTelegramMessage, sendTelegramMessage } from '../lib/telegram';
 import type { CallbackToast } from '../lib/telegram';
 import { PERSONAS } from '../agent/personas';
@@ -163,6 +179,14 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     return buildAccountReply(account);
   }
 
+  if (normalized === '/deposit' || normalized === '/fund') {
+    return resolveDepositReply(env, botId, telegramUserId);
+  }
+
+  if (normalized === '/balance' || normalized === '/余额') {
+    return resolveBalanceReply(env, botId, telegramUserId);
+  }
+
   if (normalized === '/health' || normalized === '/ops' || normalized === '/readiness') {
     if (!isTelegramOperator(env, telegramUserId)) {
       return buildOperatorOnlyReply();
@@ -219,7 +243,17 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
     return buildOpenOrdersReply(result.items, page, 2, result.source, result.warning);
   }
 
+  if (normalized === '/sell' || normalized === '/卖' || normalized === '/卖出') {
+    const sellable = await maybeSellPositionsReply(env, botId, telegramUserId);
+    return sellable ?? { text: '真实交易还没在本机配置,暂时无法卖出。先发 /deposit 开通,或 /markets 看市场。' };
+  }
+
   if (normalized.startsWith('/positions')) {
+    // Live users: show real on-chain holdings with 卖出 buttons.
+    const sellable = await maybeSellPositionsReply(env, botId, telegramUserId);
+    if (sellable) {
+      return sellable;
+    }
     const page = parseCommandPage(text);
     const positionsResult = await fetchRemotePositions(env, telegramUserId, botId);
     if (positionsResult.items.length > 0) {
@@ -264,6 +298,61 @@ async function resolveReply(env: Env, botId: string, telegramUserId: string, tex
 }
 
 async function resolveCallbackReply(env: Env, botId: string, telegramUserId: string, data: string): Promise<CallbackReplyResult> {
+  // --- Button-driven buy flow: pick outcome (bp) -> amount (ba) -> confirm+place (bg) ---
+  if (data.startsWith('bp:') || data.startsWith('ba:') || data.startsWith('bg:')) {
+    const parts = data.split(':');
+    const kind = parts[0];
+    const marketId = parts[1] ?? '';
+    const idx = Number(parts[2] ?? '-1');
+    const market = await findMarketById(env, marketId);
+    const outcome = market?.outcomes?.[idx];
+    if (!market || !outcome) {
+      return {
+        reply: { text: '这个市场可能已经轮换掉了，发 /markets 重新看看有哪些盘。' },
+        callbackToast: { text: '市场已过期', showAlert: false },
+      };
+    }
+    if (kind === 'bp') {
+      return { reply: buildBuyAmountReply(market, idx), callbackToast: { text: `买 ${outcome.name}`, showAlert: false } };
+    }
+    const amt = Number(parts[3] ?? '0');
+    if (kind === 'ba') {
+      return { reply: buildBuyConfirmButtonReply(market, idx, amt), callbackToast: { text: `$${amt}`, showAlert: false } };
+    }
+    // bg: place the real order — reuse the exact /buy path via a synthetic command.
+    // The market slug is a single hyphenated token, so it round-trips through /buy parsing.
+    const marketQuery = market.slug ?? market.question;
+    const reply = await resolveBuyReply(env, botId, telegramUserId, `/buy ${marketQuery} ${outcome.name} ${amt}`);
+    return { reply, callbackToast: { text: '下单中…', showAlert: false } };
+  }
+
+  // --- Button-driven sell flow: pick all/half (sp) -> confirm+place (sx) ---
+  if (data.startsWith('sp:') || data.startsWith('sx:')) {
+    const parts = data.split(':');
+    const kind = parts[0];
+    const key = parts[1] ?? '';
+    const fraction: 'a' | 'h' = parts[2] === 'h' ? 'h' : 'a';
+    return kind === 'sp'
+      ? resolveSellPick(env, botId, telegramUserId, key, fraction)
+      : resolveSellExecute(env, botId, telegramUserId, key, fraction);
+  }
+
+  if (data.startsWith('market_page:')) {
+    const page = parseCallbackPage(data);
+    return {
+      reply: await getMarketOverviewReply(env, page),
+      callbackToast: { text: `市场第 ${page} 页`, showAlert: false },
+    };
+  }
+
+  if (data.startsWith('market_search:')) {
+    const { query, page } = parseMarketSearchCallback(data);
+    return {
+      reply: await searchMarketsReply(env, query, page),
+      callbackToast: { text: `“${query}”第 ${page} 页`, showAlert: false },
+    };
+  }
+
   if (data.startsWith('openorders_page:')) {
     const page = parseCallbackPage(data);
     const result = await fetchLiveOpenOrders(env, telegramUserId, botId);
@@ -376,16 +465,25 @@ async function resolveCallbackReply(env: Env, botId: string, telegramUserId: str
         ),
         callbackToast: { text: '灰度 runbook 已刷新', showAlert: false },
       };
+    case 'sell_positions': {
+      const sellable = await maybeSellPositionsReply(env, botId, telegramUserId);
+      if (sellable) {
+        return { reply: sellable, callbackToast: { text: '已刷新持仓', showAlert: false } };
+      }
+      const events = await listRecentTradeEvents(env, telegramUserId, botId);
+      return { reply: buildPositionsReply(events), callbackToast: { text: '已刷新持仓', showAlert: false } };
+    }
     case 'getting_started':
       return { reply: buildGettingStartedReply(), callbackToast: { text: '开始说明在这里', showAlert: false } };
     case 'start_link_account':
       return { reply: await createLinkAccountReply(env, telegramUserId, botId), callbackToast: { text: '绑定入口已经准备好', showAlert: false } };
     case 'trade_entry': {
       const account = await getTradingAccountStatus(env, telegramUserId, botId);
-      return {
-        reply: buildTradeEntryReply(Boolean(account)),
-        callbackToast: { text: account ? '可以直接准备下单了' : '先完成账户绑定', showAlert: false },
-      };
+      if (!account) {
+        return { reply: buildTradeEntryReply(false), callbackToast: { text: '先完成账户绑定', showAlert: false } };
+      }
+      // 已开通 → 直接推活跃市场列表(带买入按钮),点 Yes/No 就能下单,不用打字。
+      return { reply: await getMarketOverviewReply(env), callbackToast: { text: '点市场的 Yes/No 直接买', showAlert: false } };
     }
     default:
       return { reply: buildDefaultReply(), callbackToast: { text: '我先帮你切回主菜单', showAlert: false } };
@@ -529,6 +627,215 @@ async function persistEnrichedTradeEvents(
   }
 }
 
+/**
+ * G6 onboarding entry: provision the user's Privy wallet + Gnosis Safe (idempotent)
+ * and hand back their Polygon USDC deposit address so they can fund and `/buy`.
+ */
+async function resolveDepositReply(env: Env, botId: string, telegramUserId: string): Promise<{ text: string }> {
+  if (!hasClobLiveConfig(env)) {
+    return { text: '真实交易还没在本机配置（Privy/CLOB 未就绪），暂时无法生成充值地址。请联系管理员。' };
+  }
+  try {
+    const result = await provisionTradingWallet(env, telegramUserId, botId);
+
+    // 部署 Safe + 设置 USDC/CTF 授权（gasless、幂等）；best-effort，失败不挡充值。
+    let setupNote = '';
+    try {
+      const account = await getTradingAccount(env, telegramUserId, botId);
+      if (account) {
+        const setup = await ensureSafeReady(env, account, telegramUserId, botId);
+        if (setup.deployed && setup.approvalsSet) {
+          setupNote = '\n钱包已部署并完成授权，充值到账后即可直接下单。';
+        }
+      }
+    } catch (setupError) {
+      console.error('[deposit] ensureSafeReady failed:', setupError instanceof Error ? (setupError.stack ?? setupError.message) : String(setupError));
+      setupNote = '\n（链上部署/授权还在进行，稍后会自动完成，不影响你先充值。）';
+    }
+
+    // 读取真实余额（deposit wallet pUSD + Safe USDC.e），让用户看到到账/可交易情况。
+    let balanceNote = '';
+    try {
+      const account = await getTradingAccount(env, telegramUserId, botId);
+      const wallet = account ? await fetchWalletInfo(env, account) : null;
+      if (wallet) {
+        balanceNote =
+          `\n\n当前余额：\n` +
+          `· 待转换（Safe USDC.e）：${wallet.balances.safeUsdce}\n` +
+          `· 可交易（pUSD）：${wallet.balances.depositPusd}\n` +
+          `到账的 USDC.e 会在你下单时自动换成可交易余额，无需手动操作。`;
+      }
+    } catch (balanceError) {
+      console.error('[deposit] fetchWalletInfo failed:', balanceError instanceof Error ? balanceError.message : String(balanceError));
+    }
+
+    const collateral = polymarketContracts().collateral;
+    return {
+      text:
+        `你的交易钱包已就绪 ✅\n\n` +
+        `充值地址（仅 Polygon 网络）：\n\`${result.safeAddress}\`\n\n` +
+        `⚠️ 必须转入 USDC.e（桥接版 USDC），合约地址：\n\`${collateral}\`\n` +
+        `（即区块浏览器里显示为 "USDC.e" / "Bridged USDC" 的那个）\n\n` +
+        `❌ 不要转原生 USDC（Circle 官方版，合约 0x3c49…3359）——Polymarket 不收，会卡住。\n` +
+        `❌ 不要用其他链/其他币种，否则资金可能丢失。\n\n` +
+        `USDC.e 到账后直接 /buy 即可下单。` +
+        setupNote +
+        balanceNote,
+    };
+  } catch (error) {
+    console.error('[deposit] provisionTradingWallet failed:', error instanceof Error ? (error.stack ?? error.message) : String(error));
+    const message =
+      error instanceof LiveOrderError ? error.userMessage : '开通交易钱包失败，请稍后再试或联系管理员。';
+    return { text: message };
+  }
+}
+
+/** Show the user's live trading balances (deposit-wallet pUSD + Safe USDC.e awaiting conversion). */
+async function resolveBalanceReply(env: Env, botId: string, telegramUserId: string): Promise<{ text: string }> {
+  const account = await getTradingAccount(env, telegramUserId, botId);
+  if (!account?.privy_wallet_id) {
+    return { text: '你还没开通交易钱包。先发 /deposit 开通并拿到充值地址。' };
+  }
+  const wallet = await fetchWalletInfo(env, account);
+  if (!wallet) {
+    return { text: '暂时读不到余额（服务在忙），过一会儿再发 /balance 试试。' };
+  }
+  return {
+    text: [
+      '你的交易余额：',
+      `· 可交易（pUSD）：${wallet.balances.depositPusd}`,
+      `· 待转换（Safe USDC.e）：${wallet.balances.safeUsdce}`,
+      '待转换的 USDC.e 会在你下单时自动换成可交易余额。',
+      '要充值就发 /deposit 拿地址；要下单就发 /markets 点按钮买。',
+    ].join('\n'),
+  };
+}
+
+/** Sellable-positions view for live users; null when live trading isn't configured / not provisioned. */
+async function maybeSellPositionsReply(env: Env, botId: string, telegramUserId: string) {
+  if (!hasClobLiveConfig(env)) {
+    return null;
+  }
+  const account = await getTradingAccount(env, telegramUserId, botId);
+  if (!account?.privy_wallet_id) {
+    return null;
+  }
+  const positions = await fetchDepositWalletPositions(env, account);
+  return buildSellPositionsReply(positions);
+}
+
+/** Shares to sell for a fraction choice: 'a' = all, 'h' = half (floored to 4dp to avoid over-sell). */
+function computeSellShares(position: SellablePosition, fraction: 'a' | 'h'): number {
+  if (fraction === 'a') {
+    return position.size;
+  }
+  return Math.floor((position.size / 2) * 1e4) / 1e4;
+}
+
+async function resolveSellPick(
+  env: Env,
+  botId: string,
+  telegramUserId: string,
+  key: string,
+  fraction: 'a' | 'h',
+): Promise<CallbackReplyResult> {
+  const account = await getTradingAccount(env, telegramUserId, botId);
+  if (!account?.privy_wallet_id) {
+    return { reply: buildTradeEntryReply(false), callbackToast: { text: '先完成账户绑定', showAlert: false } };
+  }
+  const positions = await fetchDepositWalletPositions(env, account);
+  const position = positions.find((p) => tokenKey(p.tokenId) === key);
+  if (!position) {
+    return {
+      reply: { text: '这个持仓可能已经卖掉或结算了，发 /positions 看最新持仓。' },
+      callbackToast: { text: '持仓已变化', showAlert: false },
+    };
+  }
+  const shares = computeSellShares(position, fraction);
+  return {
+    reply: buildSellConfirmReply(position, fraction, shares),
+    callbackToast: { text: `卖 ${position.outcome}`, showAlert: false },
+  };
+}
+
+async function resolveSellExecute(
+  env: Env,
+  botId: string,
+  telegramUserId: string,
+  key: string,
+  fraction: 'a' | 'h',
+): Promise<CallbackReplyResult> {
+  const account = await getTradingAccount(env, telegramUserId, botId);
+  if (!account?.privy_wallet_id) {
+    return { reply: buildTradeEntryReply(false), callbackToast: { text: '先完成账户绑定', showAlert: false } };
+  }
+  const positions = await fetchDepositWalletPositions(env, account);
+  const position = positions.find((p) => tokenKey(p.tokenId) === key);
+  if (!position) {
+    return {
+      reply: { text: '这个持仓可能已经卖掉或结算了，发 /positions 看最新持仓。' },
+      callbackToast: { text: '持仓已变化', showAlert: false },
+    };
+  }
+  const shares = computeSellShares(position, fraction);
+  if (!(shares > 0)) {
+    return {
+      reply: { text: '这个持仓数量太小,没法卖出。' },
+      callbackToast: { text: '数量太小', showAlert: false },
+    };
+  }
+
+  let execution: ExecuteBuyOrderResult;
+  try {
+    execution = await executeSellOrder(env, { account, tokenId: position.tokenId, shares, botId, telegramUserId });
+  } catch (error) {
+    if (error instanceof LiveOrderError) {
+      return {
+        reply: { text: `卖出没成功：${error.userMessage}` },
+        callbackToast: { text: '卖出失败', showAlert: false },
+      };
+    }
+    throw error;
+  }
+
+  const tradeEventId = await createTradeEvent(env, {
+    telegramUserId,
+    botId,
+    eventType: 'sell',
+    marketSlug: position.slug ?? position.title,
+    outcome: position.outcome,
+    tokenId: position.tokenId,
+    amountUsdc: Number((shares * position.curPrice).toFixed(2)),
+    status: execution.status,
+    orderId: execution.orderId,
+    payloadJson: JSON.stringify({
+      title: position.title,
+      shares,
+      curPrice: position.curPrice,
+      side: 'SELL',
+      mode: execution.mode,
+      detail: execution.detail,
+      builder_attribution: execution.builderAttribution,
+    }),
+  });
+
+  if (execution.mode === 'live' && execution.builderAttribution) {
+    await createBuilderAttribution(env, {
+      telegramUserId,
+      botId,
+      tradeEventId,
+      builderApiKeyHint: execution.builderAttribution.builderApiKeyHint,
+      orderId: execution.orderId,
+      amountUsdc: Number((shares * position.curPrice).toFixed(2)),
+    });
+  }
+
+  return {
+    reply: buildSellSubmittedReply(position, shares, execution.orderId, execution.status, execution.mode),
+    callbackToast: { text: '卖出已提交', showAlert: false },
+  };
+}
+
 async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, rawText: string) {
   const accountStatus = await getTradingAccountStatus(env, telegramUserId, botId);
   if (!accountStatus) {
@@ -570,6 +877,29 @@ async function resolveBuyReply(env: Env, botId: string, telegramUserId: string, 
   const resolvedOutcome = selectedOutcome?.name ?? normalizedOutcome;
   const resolvedTokenId = selectedOutcome?.tokenId ?? 'simulated-token';
   const liveTradingAllowed = isLiveTradingAllowed(env, telegramUserId);
+
+  // G7 应用层限额:仅对会走真实下单的用户校验单笔 / 当日累计上限。
+  if (liveTradingAllowed) {
+    const limits = parseTradeLimitsFromEnv(env);
+    if (limits.perTradeMaxUsdc !== undefined || limits.dailyMaxUsdc !== undefined) {
+      const todaysTotal = await sumTodaysLiveBuyUsdc(env, telegramUserId, botId);
+      const check = checkTradeLimits(amountUsdc, todaysTotal, limits);
+      if (!check.ok) {
+        return buildBuyErrorReply(
+          market,
+          resolvedOutcome,
+          amountUsdc,
+          new LiveOrderError({
+            code: 'LIMIT_EXCEEDED',
+            message: check.reason ?? 'limit_exceeded',
+            retryable: false,
+            httpStatus: 400,
+            userMessage: check.userMessage ?? '超过交易限额。',
+          }),
+        );
+      }
+    }
+  }
 
   let execution: ExecuteBuyOrderResult;
   if (liveTradingAllowed) {
@@ -743,6 +1073,18 @@ function parseCommandPage(text: string): number {
     return Number(tokenMatch[1]);
   }
   return 1;
+}
+
+function parseMarketSearchCallback(data: string): { query: string; page: number } {
+  // Format: market_search:<query>:<page> — query may contain spaces but no colons.
+  const body = data.slice('market_search:'.length);
+  const lastColon = body.lastIndexOf(':');
+  if (lastColon < 0) {
+    return { query: body.trim(), page: 1 };
+  }
+  const query = body.slice(0, lastColon).trim();
+  const page = parseCallbackPage(`market_search:${body.slice(lastColon + 1)}`);
+  return { query, page };
 }
 
 function parseCallbackPage(data: string): number {

@@ -310,7 +310,7 @@ describe('handleTelegramWebhook phase 4', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toContain('gamma-api.polymarket.com/markets');
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
-    expect(payload.text).toContain('先看 3 个活跃市场');
+    expect(payload.text).toContain('活跃市场（第 1/1 页');
     expect(payload.text).toContain('BTC break 120k');
     expect(db.marketCache.get('frontpage_overview')).toBeTruthy();
   });
@@ -336,10 +336,90 @@ describe('handleTelegramWebhook phase 4', () => {
     expect(response.status).toBe(200);
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     const payload = JSON.parse(String(init.body)) as { text: string };
-    expect(payload.text).toContain('给你找了 3 个和“btc”相关的市场');
+    expect(payload.text).toContain('“btc”相关市场（第 1/1 页');
     expect(payload.text).toContain('BTC break 120k');
     expect(payload.text).toContain('BTC dominance');
     expect(db.marketCache.get('search:btc')).toBeTruthy();
+  });
+
+  it('renders id-keyed buy buttons even for markets with long slugs', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const longSlug = 'will-eduardo-bolsonaro-win-the-2026-brazilian-presidential-election'; // 67 chars
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify([
+          {
+            id: '601823',
+            question: 'Will Eduardo Bolsonaro win the 2026 Brazilian presidential election?',
+            volume: 9962609,
+            endDate: '2026-12-31T00:00:00Z',
+            slug: longSlug,
+            outcomes: '["Yes","No"]',
+            outcomePrices: '["0.12","0.88"]',
+            clobTokenIds: '["11111111111111111111","22222222222222222222"]',
+          },
+        ]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    await handleTelegramWebhook(makeMessageRequest('/market'), env, 'crypto_zh');
+    const payload = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)) as {
+      reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+    };
+    const buttons = payload.reply_markup.inline_keyboard.flat();
+    // The 67-char slug would blow the 64-byte callback limit; the short id must be used instead.
+    expect(buttons.some((b) => b.callback_data === 'bp:601823:0')).toBe(true);
+    expect(buttons.some((b) => b.callback_data === 'bp:601823:1')).toBe(true);
+    expect(buttons.every((b) => b.callback_data.length <= 64)).toBe(true);
+    expect(buttons.some((b) => b.text.includes('买 Yes'))).toBe(true);
+  });
+
+  it('paginates the market overview with 上一页/下一页 buttons', async () => {
+    const db = new FakeD1();
+    const env = makeEnv(db);
+    const markets = Array.from({ length: 7 }, (_, i) => ({
+      question: `Market number ${i + 1}?`,
+      volume: (7 - i) * 100000,
+      endDate: '2026-12-31T00:00:00Z',
+    }));
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('gamma-api.polymarket.com/markets')) {
+        return new Response(JSON.stringify(markets), { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    // Page 1: top 5 markets + a 下一页 button, no 上一页.
+    await handleTelegramWebhook(makeMessageRequest('/market'), env, 'crypto_zh');
+    const page1 = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)) as {
+      text: string;
+      reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+    };
+    expect(page1.text).toContain('第 1/2 页');
+    expect(page1.text).toContain('Market number 1?');
+    expect(page1.text).toContain('Market number 5?');
+    expect(page1.text).not.toContain('Market number 6?');
+    const page1Buttons = page1.reply_markup.inline_keyboard.flat();
+    expect(page1Buttons.some((b) => b.callback_data === 'market_page:2')).toBe(true);
+    expect(page1Buttons.some((b) => b.text === '上一页')).toBe(false);
+
+    // Page 2 via callback: remaining markets + an 上一页 button back to page 1.
+    fetchMock.mockClear();
+    await handleTelegramWebhook(makeCallbackRequest('market_page:2'), env, 'crypto_zh');
+    const editCall = fetchMock.mock.calls.find(([u]) => String(u).includes('editMessageText'));
+    const page2 = JSON.parse(String((editCall as [string, RequestInit])[1].body)) as {
+      text: string;
+      reply_markup: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> };
+    };
+    expect(page2.text).toContain('第 2/2 页');
+    expect(page2.text).toContain('Market number 6?');
+    expect(page2.text).toContain('Market number 7?');
+    expect(page2.text).not.toContain('Market number 5?');
+    expect(page2.reply_markup.inline_keyboard.flat().some((b) => b.callback_data === 'market_page:1')).toBe(true);
   });
 
   it('creates a link session for unbound accounts', async () => {
@@ -411,7 +491,7 @@ describe('handleTelegramWebhook phase 4', () => {
     const payload = JSON.parse(String(init.body)) as { text: string };
     expect(payload.text).toContain('你先看这个市场');
     expect(payload.text).toContain('BTC break 120k');
-    expect(payload.text).toContain('/buy 50');
+    expect(payload.text).toContain('/buy');
   });
 
   it('returns a buy confirmation placeholder for linked users', async () => {

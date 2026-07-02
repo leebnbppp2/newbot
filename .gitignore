@@ -2,6 +2,9 @@ node_modules/
 .dist/
 dist/
 .dev.vars
+.dev.vars.*
+!.dev.vars.example
+.claude/
 .wrangler/
 coverage/
 .env

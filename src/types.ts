@@ -14,10 +14,27 @@ export interface Env {
   POLYMARKET_ORDER_API_KEY?: string;
   POLYMARKET_ORDER_SIGNING_SECRET?: string;
   POLYMARKET_BUILDER_TAG?: string;
+  POLYMARKET_BUILDER_CODE?: string; // V2 public builder code (commission attribution)
   POLYMARKET_BUILDER_API_KEY?: string;
+  ORDER_SERVICE_URL?: string; // local @polymarket/client order sidecar (V2 deposit-wallet orders)
+  ORDER_SERVICE_TOKEN?: string;
   NEWBOT_OPERATOR_TELEGRAM_IDS?: string;
   NEWBOT_LIVE_TRADING_TELEGRAM_IDS?: string;
   NEWBOT_SMOKE_REPORT_SECRET?: string;
+  // Phase 44 — Privy 托管签名 (C) + Polymarket CLOB 直连
+  PRIVY_APP_ID?: string;
+  PRIVY_APP_SECRET?: string;
+  PRIVY_AUTHORIZATION_PRIVATE_KEY?: string;
+  PRIVY_AUTHORIZATION_PUBLIC_KEY?: string;
+  PRIVY_TRADING_POLICY_ID?: string;
+  NEWBOT_CREDS_ENCRYPTION_KEY?: string;
+  POLYMARKET_CLOB_HOST?: string;
+  POLYMARKET_RELAYER_URL?: string;
+  POLYGON_RPC_URL?: string;
+  POLYMARKET_BUILDER_API_SECRET?: string;
+  POLYMARKET_BUILDER_PASSPHRASE?: string;
+  NEWBOT_PER_TRADE_MAX_USDC?: string;
+  NEWBOT_DAILY_MAX_USDC?: string;
 }
 
 export interface TelegramUser {

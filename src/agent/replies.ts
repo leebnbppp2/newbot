@@ -25,6 +25,8 @@ export interface MarketItem {
   question: string;
   volume: number;
   endDate?: string;
+  /** Polymarket gamma numeric market id — short + stable, used as the buy-button callback key. */
+  id?: string;
   slug?: string;
   outcomes?: MarketOutcome[];
 }
@@ -53,6 +55,16 @@ export interface RemoteFill {
   amountUsdc: number;
   price?: number;
   side: string;
+}
+
+/** A held on-chain position the user can sell (from the deposit wallet, via the data API). */
+export interface SellablePosition {
+  tokenId: string;
+  title: string;
+  outcome: string;
+  size: number;
+  curPrice: number;
+  slug?: string | null;
 }
 
 export function buildStartReply(): BotReply {
@@ -359,7 +371,10 @@ export function buildFillsReply(
   };
 }
 
-export function buildMarketOverviewReply(markets: MarketItem[]): BotReply {
+/** How many markets to show per page in the /markets and /search lists. */
+export const MARKET_PAGE_SIZE = 5;
+
+export function buildMarketOverviewReply(markets: MarketItem[], page = 1): BotReply {
   if (markets.length === 0) {
     return {
       text: '现在没拉到市场数据，你过一会儿再试，我会优先把看市场入口补稳。',
@@ -367,24 +382,31 @@ export function buildMarketOverviewReply(markets: MarketItem[]): BotReply {
     };
   }
 
-  const lines = markets.slice(0, 3).map((market, index) => {
+  const { items, totalPages, currentPage } = paginateItems(markets, page, MARKET_PAGE_SIZE);
+  const startIndex = (currentPage - 1) * MARKET_PAGE_SIZE;
+  const lines = items.map((market, index) => {
     const volumeText = formatUsd(market.volume);
     const endText = market.endDate ? `，截止 ${market.endDate.slice(0, 10)}` : '';
-    return `${index + 1}. ${market.question}\n   成交额 ${volumeText}${endText}`;
+    return `${startIndex + index + 1}. ${market.question}\n   成交额 ${volumeText}${endText}`;
   });
 
+  const buyRows = buildMarketListBuyRows(items, startIndex);
   return {
-    text: ['先看 3 个活跃市场：', ...lines, '', '如果你想继续，我下一步就可以带你做更细的市场查询。'].join('\n'),
+    text: [
+      `活跃市场（第 ${currentPage}/${totalPages} 页，共 ${markets.length} 个，点按钮直接买）：`,
+      ...lines,
+    ].join('\n'),
     replyMarkup: {
       inline_keyboard: [
-        [{ text: '准备下单', callback_data: 'trade_entry' }],
+        ...buyRows,
+        ...buildPaginationRows('market_page', currentPage, totalPages),
         ...buildMainMenuMarkup().inline_keyboard,
       ],
     },
   };
 }
 
-export function buildMarketSearchReply(query: string, markets: MarketItem[]): BotReply {
+export function buildMarketSearchReply(query: string, markets: MarketItem[], page = 1): BotReply {
   if (markets.length === 0) {
     return {
       text: `我暂时没找到和“${query}”相关的活跃市场。你可以换个关键词，比如 btc、eth、election。`,
@@ -392,16 +414,23 @@ export function buildMarketSearchReply(query: string, markets: MarketItem[]): Bo
     };
   }
 
-  const lines = markets.slice(0, 3).map((market, index) => {
+  const { items, totalPages, currentPage } = paginateItems(markets, page, MARKET_PAGE_SIZE);
+  const startIndex = (currentPage - 1) * MARKET_PAGE_SIZE;
+  const lines = items.map((market, index) => {
     const volumeText = formatUsd(market.volume);
-    return `${index + 1}. ${market.question}\n   成交额 ${volumeText}`;
+    return `${startIndex + index + 1}. ${market.question}\n   成交额 ${volumeText}`;
   });
 
+  const buyRows = buildMarketListBuyRows(items, startIndex);
   return {
-    text: [`给你找了 ${Math.min(markets.length, 3)} 个和“${query}”相关的市场：`, ...lines, '', '如果你想看某个方向，我下一步可以继续细化筛选。'].join('\n'),
+    text: [
+      `“${query}”相关市场（第 ${currentPage}/${totalPages} 页，共 ${markets.length} 个，点按钮直接买）：`,
+      ...lines,
+    ].join('\n'),
     replyMarkup: {
       inline_keyboard: [
-        [{ text: '准备下单', callback_data: 'trade_entry' }],
+        ...buyRows,
+        ...buildPaginationRows(`market_search:${encodeSearchQuery(query)}`, currentPage, totalPages),
         ...buildMainMenuMarkup().inline_keyboard,
       ],
     },
@@ -420,20 +449,200 @@ export function buildMarketDetailReply(query: string, market: MarketItem | null)
     ? `方向：${market.outcomes.map((outcome) => `${outcome.name}${typeof outcome.price === 'number' ? ` ${Math.round(outcome.price * 100)}%` : ''}`).join(' / ')}`
     : '方向数据待补充';
 
+  const buyRow = buildBuyOutcomeButtons(market);
+
   return {
     text: [
       '你先看这个市场：',
       market.question,
-      market.slug ? `Slug：${market.slug}` : 'Slug：待补充',
       `成交额 ${formatUsd(market.volume)}`,
       market.endDate ? `截止 ${market.endDate.slice(0, 10)}` : '截止时间待确认',
       outcomeLine,
-      '如果你想继续，直接发 /buy 50 看金额入口，或者发 /buy btc yes 50 这种格式，我就先帮你记一笔模拟单。',
+      buyRow.length ? '点下面的按钮直接买，不用打字。' : '继续可发 /buy <市场> yes 1 这种格式。',
     ].join('\n'),
     replyMarkup: {
       inline_keyboard: [
-        [{ text: '准备下单', callback_data: 'trade_entry' }],
+        ...(buyRow.length ? [buyRow] : []),
         ...buildMainMenuMarkup().inline_keyboard,
+      ],
+    },
+  };
+}
+
+/** Per-outcome "买 Yes/No" buttons for a market (callback re-resolves by the short market id). */
+function buildBuyOutcomeButtons(market: MarketItem, labelPrefix = ''): Array<{ text: string; callback_data: string }> {
+  // Use the short numeric gamma id as the callback key so callback_data stays well under
+  // Telegram's 64-byte limit regardless of how long the market slug is.
+  const key = market.id ?? '';
+  if (!key || !market.outcomes?.length) {
+    return [];
+  }
+  return market.outcomes
+    .map((outcome, idx) => ({ outcome, idx }))
+    .filter(({ outcome }) => typeof outcome.tokenId === 'string' && outcome.tokenId.length > 0)
+    .slice(0, 3)
+    .map(({ outcome, idx }) => {
+      const priceLabel = typeof outcome.price === 'number' ? ` ${Math.round(outcome.price * 100)}%` : '';
+      return { text: `${labelPrefix}买 ${outcome.name}${priceLabel}`, callback_data: `bp:${key}:${idx}` };
+    });
+}
+
+/** Rows of per-market buy buttons for a market list (numbered to match the text). */
+function buildMarketListBuyRows(
+  markets: MarketItem[],
+  startIndex = 0,
+): Array<Array<{ text: string; callback_data: string }>> {
+  return markets
+    .map((market, i) => buildBuyOutcomeButtons(market, `${startIndex + i + 1}. `))
+    .filter((row) => row.length > 0);
+}
+
+/**
+ * Pack a search query into a byte-safe fragment for a pagination callback_data.
+ * Telegram caps callback_data at 64 bytes; the `market_search:` prefix + `:<page>`
+ * suffix take ~17, so keep the query under ~40 bytes (CJK-aware).
+ */
+function encodeSearchQuery(query: string): string {
+  const cleaned = query.replace(/:/g, ' ').trim();
+  let bytes = 0;
+  let out = '';
+  for (const ch of cleaned) {
+    const chBytes = new TextEncoder().encode(ch).length;
+    if (bytes + chBytes > 40) {
+      break;
+    }
+    out += ch;
+    bytes += chBytes;
+  }
+  return out;
+}
+
+/** Step 2: after picking an outcome, show amount buttons. */
+export function buildBuyAmountReply(market: MarketItem, outcomeIdx: number): BotReply {
+  const key = market.id ?? '';
+  const outcome = market.outcomes?.[outcomeIdx];
+  const name = outcome?.name ?? '该方向';
+  return {
+    text: [`市场：${market.question}`, `方向：买 ${name}`, '选个金额（USDC）：'].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [1, 2, 5].map((amt) => ({ text: `$${amt}`, callback_data: `ba:${key}:${outcomeIdx}:${amt}` })),
+        [{ text: '‹ 返回', callback_data: 'market_overview' }],
+      ],
+    },
+  };
+}
+
+/** Step 3: confirm button before placing the real order. */
+export function buildBuyConfirmButtonReply(market: MarketItem, outcomeIdx: number, amountUsdc: number): BotReply {
+  const key = market.id ?? '';
+  const outcome = market.outcomes?.[outcomeIdx];
+  const name = outcome?.name ?? '该方向';
+  return {
+    text: [`确认下单：`, market.question, `买 ${name} · $${amountUsdc}`, '点“确认”即真实下单。'].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          { text: `✅ 确认 买${name} $${amountUsdc}`, callback_data: `bg:${key}:${outcomeIdx}:${amountUsdc}` },
+          { text: '取消', callback_data: 'market_overview' },
+        ],
+      ],
+    },
+  };
+}
+
+// --- Sell (close position) flow: list positions -> pick all/half -> confirm -> place ---
+
+/** Short, unique-enough key from a 77-digit CTF tokenId for callback_data (64-byte limit). */
+export function tokenKey(tokenId: string): string {
+  return tokenId.slice(0, 18);
+}
+
+function formatShares(size: number): string {
+  return Number.isInteger(size) ? String(size) : size.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+/** /positions when live: real holdings with per-position 卖出 buttons. */
+export function buildSellPositionsReply(positions: SellablePosition[]): BotReply {
+  if (positions.length === 0) {
+    return {
+      text: '你当前没有可卖的持仓。先发 /markets 点按钮买入,成交后就能在这里卖出。',
+      replyMarkup: buildMainMenuMarkup(),
+    };
+  }
+
+  const shown = positions.slice(0, 8);
+  const lines = shown.map((position, index) => {
+    const value = position.size * position.curPrice;
+    return `${index + 1}. ${position.title}\n   ${position.outcome} · ${formatShares(position.size)} 份 · 现价 ${position.curPrice.toFixed(3)} · 约 $${value.toFixed(2)}`;
+  });
+
+  const buttonRows = shown.map((position, index) => {
+    const key = tokenKey(position.tokenId);
+    return [
+      { text: `${index + 1}. 卖全部`, callback_data: `sp:${key}:a` },
+      { text: '卖一半', callback_data: `sp:${key}:h` },
+    ];
+  });
+
+  return {
+    text: ['你的持仓(点按钮卖出):', ...lines].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        ...buttonRows,
+        ...buildMainMenuMarkup().inline_keyboard,
+      ],
+    },
+  };
+}
+
+/** Step 2: confirm before placing the real sell order. */
+export function buildSellConfirmReply(position: SellablePosition, fraction: 'a' | 'h', shares: number): BotReply {
+  const key = tokenKey(position.tokenId);
+  const proceeds = shares * position.curPrice;
+  const label = fraction === 'a' ? '全部' : '一半';
+  return {
+    text: [
+      '确认卖出:',
+      position.title,
+      `${position.outcome} · 卖${label} ${formatShares(shares)} 份`,
+      `预计到账约 $${proceeds.toFixed(2)}(按现价 ${position.curPrice.toFixed(3)}）`,
+      '点"确认"即真实卖出。',
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [
+          { text: `✅ 确认卖${label}`, callback_data: `sx:${key}:${fraction}` },
+          { text: '取消', callback_data: 'sell_positions' },
+        ],
+      ],
+    },
+  };
+}
+
+/** Result reply after a sell order is submitted. */
+export function buildSellSubmittedReply(
+  position: SellablePosition,
+  shares: number,
+  orderId: string,
+  status: string,
+  mode: 'live' | 'simulated',
+): BotReply {
+  const title = mode === 'live' ? '卖出请求已发出。' : '模拟卖出已记录。';
+  return {
+    text: [
+      title,
+      position.title,
+      `方向:卖 ${position.outcome}`,
+      `数量:${formatShares(shares)} 份`,
+      `订单号:${orderId}`,
+      `状态:${status}`,
+      '可发 /positions 看剩余持仓,或 /balance 看余额。',
+    ].join('\n'),
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: '看持仓', callback_data: 'sell_positions' }],
+        [{ text: '看市场', callback_data: 'market_overview' }],
       ],
     },
   };

@@ -12,10 +12,18 @@
     "deploy": "node scripts/deploy.mjs deploy",
     "build": "node scripts/deploy.mjs build",
     "smoke": "node scripts/smoke.mjs",
-    "d1:apply": "node scripts/apply-sql.mjs newbot-db migrations/0001_init.sql"
+    "d1:apply": "node scripts/apply-sql.mjs newbot-db migrations/0001_init.sql",
+    "d1:apply:0002": "node scripts/apply-sql.mjs newbot-db migrations/0002_privy_custodial.sql",
+    "gen:privy-key": "node scripts/gen-privy-auth-key.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.58.0"
+    "@anthropic-ai/sdk": "^0.58.0",
+    "@polymarket/builder-relayer-client": "^0.0.10",
+    "@polymarket/builder-signing-sdk": "^1.0.0",
+    "@polymarket/clob-client": "^5.8.1",
+    "@polymarket/clob-client-v2": "^1.0.6",
+    "@privy-io/node": "^0.23.0",
+    "viem": "^2.53.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260320.0",
@@ -23,5 +31,8 @@
     "typescript": "^5.8.3",
     "vitest": "^4.1.5",
     "wrangler": "^4.80.0"
+  },
+  "overrides": {
+    "axios": "^1.12.2"
   }
 }

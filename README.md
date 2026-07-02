@@ -75,6 +75,16 @@ npx wrangler secret put BOT_TOKEN_CRYPTO_ZH
 如果你要启用 Phase 25 的 smoke 报告回传，可以额外提供：
 - `NEWBOT_SMOKE_REPORT_SECRET`：`POST /ops/smoke-report` 的共享 secret；只用于写入 smoke 结果，不是 Telegram token
 
+如果你要启用 Phase 44 的真实 Polymarket CLOB 交易（Privy 托管签名，方案 C；详见 `docs/PHASE_44_PRIVY_CUSTODIAL.md`），还需要额外配置：
+- `PRIVY_APP_ID` / `PRIVY_APP_SECRET`：Privy app 凭证
+- `PRIVY_AUTHORIZATION_PRIVATE_KEY` / `PRIVY_AUTHORIZATION_PUBLIC_KEY`：P-256 授权密钥（后端控制钱包；私钥作 secret，公钥作 owner）
+- `NEWBOT_CREDS_ENCRYPTION_KEY`：AES-GCM 主密钥，加密用户 L2 creds
+- `POLYMARKET_CLOB_HOST`（如 `https://clob.polymarket.com`） / `POLYMARKET_RELAYER_URL` / `POLYGON_RPC_URL`
+- `POLYMARKET_BUILDER_API_KEY` / `POLYMARKET_BUILDER_API_SECRET` / `POLYMARKET_BUILDER_PASSPHRASE`：Builder 凭证（抽成来源）
+- 可选：`PRIVY_TRADING_POLICY_ID`、`NEWBOT_PER_TRADE_MAX_USDC`、`NEWBOT_DAILY_MAX_USDC`（应用层单笔/日限额）
+
+> Phase 44 走 Worker 进程内直连官方 CLOB（Privy 嵌入式钱包控制 Gnosis Safe，sigType=2），取代旧的 `POLYMARKET_ORDER_API_BASE` 远端 signer 路径。配齐后 `NEWBOT_TRADING_MODE=live` + `NEWBOT_LIVE_TRADING_TELEGRAM_IDS` 灰度；schema 迁移：`npm run d1:apply:0002`。
+
 5. 应用 schema、部署、设置 webhook
 ```bash
 npm run d1:apply

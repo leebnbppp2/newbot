@@ -1,0 +1,47 @@
+# NewBot 环境变量模板（Phase 44 真实交易）。
+# 用法：复制为 .dev.vars（已 gitignore，wrangler dev 会自动读取），把 <...> 换成真实值。
+# 生产部署时，标 [SECRET] 的用 `npx wrangler secret put <名字>` 设置，其余可放 wrangler.jsonc vars。
+# ⚠️ 切勿提交 .dev.vars，也不要把 [SECRET] 值贴进聊天。
+
+# ── Telegram（基础，必填）─────────────────────────────
+TELEGRAM_WEBHOOK_SECRET=<telegram webhook secret>           # [SECRET]
+BOT_TOKEN_CRYPTO_ZH=<crypto_zh 这个 persona 的 bot token>    # [SECRET]
+
+# ── 交易总开关 & 灰度 ────────────────────────────────
+# 只有 =live 才发真实单；其它值（含留空）= 全部走模拟单（安全默认）
+NEWBOT_TRADING_MODE=simulated
+# 真实交易用户白名单（逗号分隔的 Telegram user id）。首发只放你自己/内部账户
+NEWBOT_LIVE_TRADING_TELEGRAM_IDS=<your-telegram-user-id>
+
+# ── Privy（托管签名）─────────────────────────────────
+PRIVY_APP_ID=<privy app id>
+PRIVY_APP_SECRET=<privy app secret>                         # [SECRET]
+# 跑 `npm run gen:privy-key` 生成下面这对：
+PRIVY_AUTHORIZATION_PUBLIC_KEY=<P-256 公钥，作 wallet owner>
+PRIVY_AUTHORIZATION_PRIVATE_KEY=<P-256 私钥>                # [SECRET]
+# 可选：复用已建好的 policy id；留空则按需自动创建
+PRIVY_TRADING_POLICY_ID=
+
+# ── L2 creds 加密主密钥 ──────────────────────────────
+# 自己生成一段高熵随机串，例如：openssl rand -base64 48
+NEWBOT_CREDS_ENCRYPTION_KEY=<random-long-string>            # [SECRET]
+
+# ── Polymarket CLOB / 链 ─────────────────────────────
+POLYMARKET_CLOB_HOST=https://clob.polymarket.com
+POLYMARKET_RELAYER_URL=https://relayer-v2.polymarket.com    # 固定公开端点;留空也行(代码默认就是它)
+POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com      # 任意可用 Polygon RPC(注:官方 polygon-rpc.com 对部分 IP 返回 403 tenant disabled);高频建议换带 key 的(Alchemy/Infura/QuickNode)
+
+# ── Builder 归因（抽成来源）──────────────────────────
+POLYMARKET_BUILDER_API_KEY=<builder api key>               # [SECRET]
+POLYMARKET_BUILDER_API_SECRET=<builder api secret>         # [SECRET]
+POLYMARKET_BUILDER_PASSPHRASE=<builder passphrase>         # [SECRET]
+POLYMARKET_BUILDER_TAG=newbot
+
+# ── 应用层限额（纵深防御，建议设）────────────────────
+NEWBOT_PER_TRADE_MAX_USDC=5
+NEWBOT_DAILY_MAX_USDC=20
+
+# ── 可选 ─────────────────────────────────────────────
+# 操作者白名单（限制 /health /metrics /runbook 等）
+NEWBOT_OPERATOR_TELEGRAM_IDS=<your-telegram-user-id>
+APP_ENV=development

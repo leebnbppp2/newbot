@@ -18,6 +18,9 @@ export function handleHealthz(request: Request, env: Env): Response {
       signing: readiness.signing,
       builder_attribution: readiness.builderAttribution,
       live_trading_allowlist: readiness.liveTradingAllowlist,
+      clob_live: readiness.clobLive,
+      privy_configured: readiness.privyConfigured,
+      creds_encryption: readiness.credsEncryption,
       warnings: readiness.warnings,
     },
   });

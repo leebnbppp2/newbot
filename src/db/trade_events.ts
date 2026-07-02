@@ -15,6 +15,7 @@ export interface TradeEventRow {
   amount_usdc: number;
   status: string;
   order_id: string | null;
+  client_order_id?: string | null;
   payload_json: string | null;
   created_at?: string;
 }
@@ -30,6 +31,7 @@ export interface CreateTradeEventInput {
   status: string;
   orderId: string | null;
   payloadJson: string | null;
+  clientOrderId?: string | null;
 }
 
 export async function createTradeEvent(env: Env, input: CreateTradeEventInput): Promise<number | null> {
@@ -45,8 +47,9 @@ export async function createTradeEvent(env: Env, input: CreateTradeEventInput): 
       status,
       order_id,
       payload_json,
+      client_order_id,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
   )
     .bind(
       input.telegramUserId,
@@ -59,6 +62,7 @@ export async function createTradeEvent(env: Env, input: CreateTradeEventInput): 
       input.status,
       input.orderId,
       input.payloadJson,
+      input.clientOrderId ?? null,
     )
     .run();
 
@@ -120,5 +124,39 @@ export async function getTradeEventByOrderId(
       LIMIT 1`,
   )
     .bind(orderId, telegramUserId, botId)
+    .first<TradeEventRow>();
+}
+
+/** Sum today's (UTC) live BUY amount for a user — feeds the daily cap (Phase 44 G7). */
+export async function sumTodaysLiveBuyUsdc(env: Env, telegramUserId: string, botId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COALESCE(SUM(amount_usdc), 0) AS total
+       FROM trade_events
+      WHERE telegram_user_id = ?
+        AND bot_id = ?
+        AND event_type = 'buy'
+        AND status LIKE 'live_%'
+        AND created_at >= date('now')`,
+  )
+    .bind(telegramUserId, botId)
+    .first<{ total: number }>();
+  return row?.total ?? 0;
+}
+
+export async function getTradeEventByClientOrderId(
+  env: Env,
+  telegramUserId: string,
+  botId: string,
+  clientOrderId: string,
+): Promise<TradeEventRow | null> {
+  return env.DB.prepare(
+    `SELECT id, telegram_user_id, bot_id, event_type, market_slug, outcome, token_id, amount_usdc, status, order_id, client_order_id, payload_json, created_at
+       FROM trade_events
+      WHERE client_order_id = ?
+        AND telegram_user_id = ?
+        AND bot_id = ?
+      LIMIT 1`,
+  )
+    .bind(clientOrderId, telegramUserId, botId)
     .first<TradeEventRow>();
 }
