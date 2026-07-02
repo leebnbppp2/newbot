@@ -368,27 +368,57 @@ export async function executeSellOrder(env: Env, input: ExecuteSellOrderInput): 
   };
 }
 
+/** One row of the public Polymarket Data API `/positions` response (subset we consume). */
+interface DataApiPosition {
+  asset?: string;
+  title?: string;
+  slug?: string;
+  outcome?: string;
+  size?: number;
+  curPrice?: number;
+  avgPrice?: number;
+  cashPnl?: number;
+  percentPnl?: number;
+}
+
 /**
- * Read the user's deposit-wallet positions (for selling) via the sidecar's `/positions`,
- * which proxies the Polymarket data API. Returns [] when unavailable / not provisioned.
+ * Read the user's on-chain positions (funder/Safe holdings) straight from the public Polymarket
+ * Data API — `GET /positions?user=<funder>`, no signing/sidecar needed (matches Phase 44 "进程内直连").
+ * Carries avgPrice/cashPnl/percentPnl so the sell flow shows authoritative P&L. Returns [] when
+ * unavailable / not provisioned.
  */
 export async function fetchDepositWalletPositions(env: Env, account: TradingAccountRow): Promise<SellablePosition[]> {
-  if (!account.privy_wallet_id) {
+  const funder = account.funder_address?.trim();
+  if (!funder) {
     return [];
   }
-  const url = (env.ORDER_SERVICE_URL ?? 'http://127.0.0.1:8799').replace(/\/$/, '');
-  const token = env.ORDER_SERVICE_TOKEN ?? 'local-newbot';
+  const base = (env.POLYMARKET_DATA_API_URL ?? 'https://data-api.polymarket.com').replace(/\/$/, '');
   try {
-    const resp = await fetch(`${url}/positions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-order-token': token },
-      body: JSON.stringify({ walletId: account.privy_wallet_id, eoaAddress: account.signer_address }),
+    const resp = await fetch(`${base}/positions?user=${encodeURIComponent(funder)}&sizeThreshold=0.1`, {
+      headers: { accept: 'application/json' },
     });
     if (!resp.ok) {
       return [];
     }
-    const data = (await resp.json()) as { ok?: boolean; positions?: SellablePosition[] };
-    return Array.isArray(data.positions) ? data.positions : [];
+    const rows = (await resp.json()) as DataApiPosition[];
+    if (!Array.isArray(rows)) {
+      return [];
+    }
+    return rows
+      .filter((row): row is DataApiPosition & { asset: string; size: number } =>
+        typeof row.asset === 'string' && typeof row.size === 'number' && row.size > 0,
+      )
+      .map((row) => ({
+        tokenId: row.asset,
+        title: typeof row.title === 'string' && row.title.length > 0 ? row.title : (row.slug ?? 'Polymarket'),
+        outcome: typeof row.outcome === 'string' ? row.outcome : '',
+        size: row.size,
+        curPrice: typeof row.curPrice === 'number' ? row.curPrice : 0,
+        ...(typeof row.slug === 'string' ? { slug: row.slug } : {}),
+        ...(typeof row.avgPrice === 'number' ? { avgPrice: row.avgPrice } : {}),
+        ...(typeof row.cashPnl === 'number' ? { cashPnl: row.cashPnl } : {}),
+        ...(typeof row.percentPnl === 'number' ? { percentPnl: row.percentPnl } : {}),
+      }));
   } catch {
     return [];
   }

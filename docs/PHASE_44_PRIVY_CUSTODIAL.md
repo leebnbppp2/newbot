@@ -65,7 +65,7 @@ Telegram → Worker(CF)─┬─ @privy-io/node ──▶ Privy MPC/TEE(持私�
 - `src/lib/polymarket_clob.ts` — ClobClient(sigType=2 + builder)、L2 creds、下单
 - `src/lib/creds_crypto.ts` — L2 creds AES-GCM 加解密(fail-closed)
 - `src/lib/order_gateway.ts` — `executeBuyOrder` Path A 路由 + readiness + `computeAvgCostFromBuys`（按买入记录反推成本价）
-- 卖出盈亏:`/sell` 列表、确认页、已提交页都显示成本价与盈亏。成本价优先取持仓 feed 的 `avgPrice`/`cashPnl`/`percentPnl`（data API 字段,order-service 需透传）;feed 未给时用用户 live 买入记录反推(加权平均,标「估算」)。
+- 卖出盈亏:`/sell` 列表、确认页、已提交页都显示成本价与盈亏。持仓由 Worker 直读公开 **Polymarket Data API**(`GET /positions?user=<funder>`,`fetchDepositWalletPositions`,无需 sidecar/签名),带出 `avgPrice`/`cashPnl`/`percentPnl` → 权威盈亏。Data API 不可达/未开通时回退用户 live 买入记录反推(`computeAvgCostFromBuys`,加权平均,标「估算」)。可用 `POLYMARKET_DATA_API_URL` 覆盖端点。
 - `src/lib/trade_limits.ts` — 应用层限额
 - `src/db/{trading_credentials,idempotency,users,trade_events}.ts` — 持久化
 - `migrations/0002_privy_custodial.sql` — schema

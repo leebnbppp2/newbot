@@ -18,6 +18,7 @@ export interface Env {
   POLYMARKET_BUILDER_API_KEY?: string;
   ORDER_SERVICE_URL?: string; // local @polymarket/client order sidecar (V2 deposit-wallet orders)
   ORDER_SERVICE_TOKEN?: string;
+  POLYMARKET_DATA_API_URL?: string; // public positions/data API (default https://data-api.polymarket.com)
   NEWBOT_OPERATOR_TELEGRAM_IDS?: string;
   NEWBOT_LIVE_TRADING_TELEGRAM_IDS?: string;
   NEWBOT_SMOKE_REPORT_SECRET?: string;

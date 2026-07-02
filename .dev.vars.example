@@ -28,6 +28,8 @@ NEWBOT_CREDS_ENCRYPTION_KEY=<random-long-string>            # [SECRET]
 
 # ── Polymarket CLOB / 链 ─────────────────────────────
 POLYMARKET_CLOB_HOST=https://clob.polymarket.com
+# 持仓/盈亏读取(公开 Data API,无需鉴权);留空用默认端点
+POLYMARKET_DATA_API_URL=https://data-api.polymarket.com
 POLYMARKET_RELAYER_URL=https://relayer-v2.polymarket.com    # 固定公开端点;留空也行(代码默认就是它)
 POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com      # 任意可用 Polygon RPC(注:官方 polygon-rpc.com 对部分 IP 返回 403 tenant disabled);高频建议换带 key 的(Alchemy/Infura/QuickNode)
 
