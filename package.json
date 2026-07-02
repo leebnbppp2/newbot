@@ -12,6 +12,7 @@
     "deploy": "node scripts/deploy.mjs deploy",
     "build": "node scripts/deploy.mjs build",
     "smoke": "node scripts/smoke.mjs",
+    "tg:commands": "node scripts/set-telegram-commands.mjs",
     "d1:apply": "node scripts/apply-sql.mjs newbot-db migrations/0001_init.sql",
     "d1:apply:0002": "node scripts/apply-sql.mjs newbot-db migrations/0002_privy_custodial.sql",
     "gen:privy-key": "node scripts/gen-privy-auth-key.mjs"

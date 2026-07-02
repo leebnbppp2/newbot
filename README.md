@@ -95,6 +95,13 @@ WEBHOOK_SECRET=*** as TELEGRAM_WEBHOOK_SECRET> \
 node scripts/set-webhook.mjs
 ```
 
+6. 注册命令菜单（一次性；改了命令清单后再跑一次）
+```bash
+npm run tg:commands              # 读取 .dev.vars / 环境里的 BOT_TOKEN_* 与 NEWBOT_OPERATOR_TELEGRAM_IDS
+npm run tg:commands -- --dry-run # 先看会注册什么，不碰网络
+```
+用 Telegram Bot API 的 `setMyCommands` 把命令写进输入框旁的 **Menu 按钮** 和 `/` 自动补全，用户点一下即可，不用手打。公开命令（`/start /markets /buy /sell /positions …`）对所有人可见；操作者命令（`/health /metrics /runbook`）只在 `NEWBOT_OPERATOR_TELEGRAM_IDS` 里列出的用户私聊中可见（非数字 id 会被跳过并告警）。直连 Bot API，不需要先部署 Worker。
+
 ## 本地验证
 
 ```bash
