@@ -6,10 +6,9 @@ import type { RemoteFill, RemoteOpenOrder, RemotePosition, MarketItem, SellableP
 import type { TradeEventRow } from '../db/trade_events';
 import type { TradingAccountRow } from '../db/users';
 import type { Env } from '../types';
-import { getTradingCredentials, upsertTradingCredentials } from '../db/trading_credentials';
-import { decryptL2Creds, encryptL2Creds } from './creds_crypto';
-import { privyClientFromEnv, walletClientForUser } from './privy_signer';
-import { builderConfigFromEnv, deriveL2Creds, makeClobClient, placeMarketBuyOrder, type PlaceOrderParams } from './polymarket_clob';
+// The live order/read hot-path posts to the order-service sidecar (see sidecar/order_service.mjs);
+// the in-Worker Privy+CLOB signing modules are only used by onboarding, not here.
+import type { PlaceOrderParams } from './polymarket_clob';
 
 export interface ExecuteBuyOrderInput {
   market: MarketItem;
