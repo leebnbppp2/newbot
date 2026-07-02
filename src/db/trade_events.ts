@@ -143,6 +143,26 @@ export async function sumTodaysLiveBuyUsdc(env: Env, telegramUserId: string, bot
   return row?.total ?? 0;
 }
 
+/** Live BUY rows for one token (amount + payload) so the sell view can reconstruct a cost basis. */
+export async function listLiveBuysForToken(
+  env: Env,
+  telegramUserId: string,
+  botId: string,
+  tokenId: string,
+): Promise<Array<Pick<TradeEventRow, 'amount_usdc' | 'payload_json'>>> {
+  const result = await env.DB.prepare(
+    `SELECT amount_usdc, payload_json
+       FROM trade_events
+      WHERE telegram_user_id = ? AND bot_id = ? AND token_id = ?
+        AND event_type = 'buy' AND status LIKE 'live_%'
+      ORDER BY id DESC
+      LIMIT 500`,
+  )
+    .bind(telegramUserId, botId, tokenId)
+    .all<Pick<TradeEventRow, 'amount_usdc' | 'payload_json'>>();
+  return result.results ?? [];
+}
+
 export async function getTradeEventByClientOrderId(
   env: Env,
   telegramUserId: string,

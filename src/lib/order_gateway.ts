@@ -394,6 +394,36 @@ export async function fetchDepositWalletPositions(env: Env, account: TradingAcco
   }
 }
 
+/**
+ * Weighted-average cost per share from BUY rows, using each buy's recorded `price` (in payload)
+ * and USDC spent: avg = Σamount / Σ(amount / price). Returns null when no priced buy is found.
+ * Used to reconstruct a cost basis for P&L when the positions feed doesn't carry `avgPrice`.
+ */
+export function computeAvgCostFromBuys(buys: Array<{ amount_usdc: number; payload_json: string | null }>): number | null {
+  let usdc = 0;
+  let shares = 0;
+  for (const buy of buys) {
+    if (!(buy.amount_usdc > 0) || !buy.payload_json) {
+      continue;
+    }
+    let price: number | null = null;
+    try {
+      const parsed = JSON.parse(buy.payload_json) as { price?: unknown };
+      if (typeof parsed.price === 'number' && parsed.price > 0) {
+        price = parsed.price;
+      }
+    } catch {
+      // ignore malformed payloads
+    }
+    if (price === null) {
+      continue;
+    }
+    usdc += buy.amount_usdc;
+    shares += buy.amount_usdc / price;
+  }
+  return shares > 0 ? usdc / shares : null;
+}
+
 export interface WalletInfo {
   depositWallet: string;
   safe: string | null;

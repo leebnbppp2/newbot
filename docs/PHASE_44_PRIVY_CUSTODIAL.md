@@ -64,7 +64,8 @@ Telegram → Worker(CF)─┬─ @privy-io/node ──▶ Privy MPC/TEE(持私�
 - `src/lib/privy_signer.ts` — Privy 钱包/policy 开通 + viem WalletClient(ClobSigner)
 - `src/lib/polymarket_clob.ts` — ClobClient(sigType=2 + builder)、L2 creds、下单
 - `src/lib/creds_crypto.ts` — L2 creds AES-GCM 加解密(fail-closed)
-- `src/lib/order_gateway.ts` — `executeBuyOrder` Path A 路由 + readiness
+- `src/lib/order_gateway.ts` — `executeBuyOrder` Path A 路由 + readiness + `computeAvgCostFromBuys`（按买入记录反推成本价）
+- 卖出盈亏:`/sell` 列表、确认页、已提交页都显示成本价与盈亏。成本价优先取持仓 feed 的 `avgPrice`/`cashPnl`/`percentPnl`（data API 字段,order-service 需透传）;feed 未给时用用户 live 买入记录反推(加权平均,标「估算」)。
 - `src/lib/trade_limits.ts` — 应用层限额
 - `src/db/{trading_credentials,idempotency,users,trade_events}.ts` — 持久化
 - `migrations/0002_privy_custodial.sql` — schema

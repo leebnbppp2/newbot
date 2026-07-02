@@ -41,6 +41,7 @@ import { appendConversationTurn } from '../db/conversations';
 import {
   createTradeEvent,
   getTradeEventByOrderId,
+  listLiveBuysForToken,
   listRecentTradeEvents,
   sumTodaysLiveBuyUsdc,
   updateTradeEventStatus,
@@ -50,6 +51,7 @@ import { getTradingAccount, getTradingAccountStatus, upsertTelegramUser } from '
 import { findBestMarket, findMarketById, getMarketDetailReply, getMarketOverviewReply, searchMarketsReply } from '../lib/markets';
 import {
   cancelLiveOrder,
+  computeAvgCostFromBuys,
   enrichTradeEventsWithLiveStatus,
   executeBuyOrder,
   executeSellOrder,
@@ -711,6 +713,31 @@ async function resolveBalanceReply(env: Env, botId: string, telegramUserId: stri
   };
 }
 
+type SellableAccount = NonNullable<Awaited<ReturnType<typeof getTradingAccount>>>;
+
+/**
+ * Fetch deposit-wallet positions and make sure each carries a cost basis for P&L: keep the feed's
+ * `avgPrice` when present, otherwise reconstruct it from the user's live BUY history (marked 估算).
+ */
+async function loadSellablePositions(
+  env: Env,
+  account: SellableAccount,
+  botId: string,
+  telegramUserId: string,
+): Promise<SellablePosition[]> {
+  const positions = await fetchDepositWalletPositions(env, account);
+  return Promise.all(
+    positions.map(async (position) => {
+      if (typeof position.avgPrice === 'number' && position.avgPrice > 0) {
+        return position;
+      }
+      const buys = await listLiveBuysForToken(env, telegramUserId, botId, position.tokenId);
+      const avgCost = computeAvgCostFromBuys(buys);
+      return avgCost === null ? position : { ...position, avgPrice: avgCost, costEstimated: true };
+    }),
+  );
+}
+
 /** Sellable-positions view for live users; null when live trading isn't configured / not provisioned. */
 async function maybeSellPositionsReply(env: Env, botId: string, telegramUserId: string) {
   if (!hasClobLiveConfig(env)) {
@@ -720,7 +747,7 @@ async function maybeSellPositionsReply(env: Env, botId: string, telegramUserId: 
   if (!account?.privy_wallet_id) {
     return null;
   }
-  const positions = await fetchDepositWalletPositions(env, account);
+  const positions = await loadSellablePositions(env, account, botId, telegramUserId);
   return buildSellPositionsReply(positions);
 }
 
@@ -743,7 +770,7 @@ async function resolveSellPick(
   if (!account?.privy_wallet_id) {
     return { reply: buildTradeEntryReply(false), callbackToast: { text: '先完成账户绑定', showAlert: false } };
   }
-  const positions = await fetchDepositWalletPositions(env, account);
+  const positions = await loadSellablePositions(env, account, botId, telegramUserId);
   const position = positions.find((p) => tokenKey(p.tokenId) === key);
   if (!position) {
     return {
@@ -769,7 +796,7 @@ async function resolveSellExecute(
   if (!account?.privy_wallet_id) {
     return { reply: buildTradeEntryReply(false), callbackToast: { text: '先完成账户绑定', showAlert: false } };
   }
-  const positions = await fetchDepositWalletPositions(env, account);
+  const positions = await loadSellablePositions(env, account, botId, telegramUserId);
   const position = positions.find((p) => tokenKey(p.tokenId) === key);
   if (!position) {
     return {
